@@ -1,0 +1,69 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to Canal de Isabel II",
+        "description": "Enter your Virtual Office credentials and a 2Captcha API key. 2Captcha is a paid third-party service used only when the portal requests its invisible reCAPTCHA.",
+        "data": {
+          "username": "NIF or NIE",
+          "password": "Virtual Office password",
+          "captcha_api_key": "2Captcha API key"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Sign-in required",
+        "description": "Automatic sign-in failed. Check your Virtual Office credentials and 2Captcha API key.",
+        "data": {
+          "username": "NIF or NIE",
+          "password": "Virtual Office password",
+          "captcha_api_key": "2Captcha API key"
+        }
+      },
+      "reconfigure": {
+        "title": "Update account credentials",
+        "description": "Replace the credentials used for automatic Virtual Office sign-in.",
+        "data": {
+          "username": "NIF or NIE",
+          "password": "Virtual Office password",
+          "captcha_api_key": "2Captcha API key"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Unable to connect to the Canal de Isabel II portal.",
+      "invalid_auth": "The Virtual Office rejected the NIF/NIE or password.",
+      "captcha_failed": "2Captcha could not solve the portal challenge. Check the API key and account balance.",
+      "invalid_response": "The Canal de Isabel II portal returned an unsupported response."
+    },
+    "abort": {
+      "already_configured": "This Canal de Isabel II account is already configured.",
+      "unique_id_mismatch": "These credentials belong to a different Canal de Isabel II account.",
+      "reauth_successful": "The account credentials were updated successfully.",
+      "reconfigure_successful": "The account credentials were updated successfully."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Synchronization schedule",
+        "description": "Choose the local hour for the daily incremental synchronization.",
+        "data": {
+          "sync_hour": "Synchronization hour (0–23)"
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "meter_reading": {
+        "name": "Meter reading"
+      },
+      "hourly_consumption": {
+        "name": "Hourly consumption"
+      },
+      "daily_consumption": {
+        "name": "Daily consumption"
+      }
+    }
+  }
+}

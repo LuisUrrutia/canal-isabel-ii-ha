@@ -1,0 +1,12 @@
+{
+    "domain": "canal_de_isabel_ii",
+    "name": "Canal de Isabel II",
+    "codeowners": ["@LuisUrrutia"],
+    "config_flow": true,
+    "documentation": "https://github.com/LuisUrrutia/canal-isabel-ii-ha",
+    "integration_type": "service",
+    "iot_class": "cloud_polling",
+    "issue_tracker": "https://github.com/LuisUrrutia/canal-isabel-ii-ha/issues",
+    "requirements": ["2captcha-python==2.1.0"],
+    "version": "3.0.0"
+}

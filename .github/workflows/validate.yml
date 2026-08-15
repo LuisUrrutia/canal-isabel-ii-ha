@@ -1,0 +1,87 @@
+name: Validate
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: validate-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python:
+    name: Python
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          enable-cache: false
+          python-version: "3.14.7"
+          version: "0.12.5"
+
+      - name: Install locked dependencies
+        shell: bash
+        run: uv sync --locked --all-groups
+
+      - name: Check formatting
+        shell: bash
+        run: uv run ruff format --check .
+
+      - name: Lint
+        shell: bash
+        run: uv run ruff check .
+
+      - name: Test
+        shell: bash
+        run: >-
+          uv run pytest
+          --cov=custom_components/canal_de_isabel_ii
+          --cov-report=term-missing
+          --cov-fail-under=95
+
+  hacs:
+    name: HACS
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Validate HACS repository
+        uses: docker://ghcr.io/hacs/action@sha256:41f6310585d9fb72c7a0e183cce0594355715bc24112b62bc4279b83412edccb # main, checked 2026-08-15
+        env:
+          INPUT_CATEGORY: integration
+          INPUT_COMMENT: "false"
+          INPUT_GITHUB_TOKEN: ${{ github.token }}
+          INPUT_REPOSITORY: ${{ github.repository }}
+
+  hassfest:
+    name: Hassfest
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Validate Home Assistant integration
+        uses: docker://ghcr.io/home-assistant/hassfest@sha256:fb33da5538163d271e0f06557d70af8d5dbe90ae60e2826e7f510c1ea90c564c # checked 2026-08-15

@@ -1,0 +1,41 @@
+[project]
+name = "canal-isabel-ii-ha"
+version = "3.0.0"
+description = "Home Assistant custom integration for Canal de Isabel II"
+requires-python = ">=3.14.2"
+dependencies = [
+    "2captcha-python==2.1.0",
+    "homeassistant==2026.8.2",
+]
+
+[dependency-groups]
+dev = [
+    "pytest-cov==7.1.0",
+    "pytest-homeassistant-custom-component==0.13.356",
+    "ruff==0.16.3",
+]
+
+[tool.pytest.ini_options]
+addopts = "--strict-markers --strict-config"
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py314"
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = [
+    "COM812",
+    "CPY001",
+    "D203",
+    "D213",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"scripts/**" = ["S105", "T201"]
+"tests/**" = ["ARG001", "PLR2004", "S101", "S105", "S106", "TC002", "TC003"]
+
+[tool.uv]
+package = false

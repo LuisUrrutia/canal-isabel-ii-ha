@@ -1,0 +1,69 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Conectar con Canal de Isabel II",
+        "description": "Introduce tus credenciales de la Oficina Virtual y una clave API de 2Captcha. 2Captcha es un servicio de pago de terceros que solo se utiliza cuando el portal solicita su reCAPTCHA invisible.",
+        "data": {
+          "username": "NIF o NIE",
+          "password": "Contraseña de la Oficina Virtual",
+          "captcha_api_key": "Clave API de 2Captcha"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Es necesario iniciar sesión",
+        "description": "El inicio de sesión automático ha fallado. Comprueba las credenciales de la Oficina Virtual y la clave API de 2Captcha.",
+        "data": {
+          "username": "NIF o NIE",
+          "password": "Contraseña de la Oficina Virtual",
+          "captcha_api_key": "Clave API de 2Captcha"
+        }
+      },
+      "reconfigure": {
+        "title": "Actualizar las credenciales",
+        "description": "Sustituye las credenciales usadas para iniciar sesión automáticamente en la Oficina Virtual.",
+        "data": {
+          "username": "NIF o NIE",
+          "password": "Contraseña de la Oficina Virtual",
+          "captcha_api_key": "Clave API de 2Captcha"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "No se ha podido conectar con el portal de Canal de Isabel II.",
+      "invalid_auth": "La Oficina Virtual ha rechazado el NIF/NIE o la contraseña.",
+      "captcha_failed": "2Captcha no ha podido resolver el desafío del portal. Comprueba la clave API y el saldo de la cuenta.",
+      "invalid_response": "El portal de Canal de Isabel II ha devuelto una respuesta no compatible."
+    },
+    "abort": {
+      "already_configured": "Esta cuenta de Canal de Isabel II ya está configurada.",
+      "unique_id_mismatch": "Estas credenciales pertenecen a una cuenta distinta de Canal de Isabel II.",
+      "reauth_successful": "Las credenciales se han actualizado correctamente.",
+      "reconfigure_successful": "Las credenciales se han actualizado correctamente."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Horario de sincronización",
+        "description": "Elige la hora local para la sincronización incremental diaria.",
+        "data": {
+          "sync_hour": "Hora de sincronización (0–23)"
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "meter_reading": {
+        "name": "Lectura del contador"
+      },
+      "hourly_consumption": {
+        "name": "Consumo horario"
+      },
+      "daily_consumption": {
+        "name": "Consumo diario"
+      }
+    }
+  }
+}
