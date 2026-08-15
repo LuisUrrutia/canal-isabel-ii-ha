@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from calendar import monthrange
@@ -15,7 +16,7 @@ from urllib.parse import parse_qs, parse_qsl, urlencode, urljoin, urlsplit, urlu
 from zoneinfo import ZoneInfo
 
 from aiohttp import ClientError, ClientSession, ClientTimeout, FormData
-from twocaptcha import AsyncTwoCaptcha
+from twocaptcha import TwoCaptcha
 
 from .const import BASE_URL, CONSUMPTION_URL
 from .models import (
@@ -30,7 +31,7 @@ if TYPE_CHECKING:
 
 _PORTAL_TIME_ZONE = ZoneInfo("Europe/Madrid")
 _REQUEST_TIMEOUT = ClientTimeout(total=45)
-_USER_AGENT = "Canal-Isabel-II-Home-Assistant/3.1"
+_USER_AGENT = "Canal-Isabel-II-Home-Assistant/3.1.1"
 _LOGIN_PATH = "/web/ovir"
 _DEFAULT_HISTORY_DAYS = 183
 _DEFAULT_CORRECTION_DAYS = 2
@@ -82,6 +83,10 @@ class CanalInvalidResponseError(CanalError):
     """The portal returned data that cannot be understood safely."""
 
 
+class _CanalSessionExpiredError(CanalError):
+    """The authenticated portal session expired during a synchronization."""
+
+
 @dataclass(frozen=True, slots=True)
 class CanalCredentials:
     """Account credentials required for unattended portal login."""
@@ -125,6 +130,53 @@ class CaptchaSolver(Protocol):
         userAgent: str,  # noqa: N803 - 2Captcha's public argument name
     ) -> dict[str, object]:
         """Resolve one reCAPTCHA challenge."""
+
+
+class _BlockingCaptchaSolver(Protocol):
+    """Synchronous 2Captcha-compatible solver executed in a worker thread."""
+
+    def recaptcha(
+        self,
+        *,
+        sitekey: str,
+        url: str,
+        enterprise: int,
+        invisible: int,
+        userAgent: str,  # noqa: N803 - 2Captcha's public argument name
+    ) -> dict[str, object]:
+        """Resolve one reCAPTCHA challenge synchronously."""
+
+
+class _ThreadedTwoCaptcha:
+    """Keep the blocking 2Captcha SDK outside Home Assistant's event loop."""
+
+    def __init__(
+        self,
+        api_key: str,
+        *,
+        solver: _BlockingCaptchaSolver | None = None,
+    ) -> None:
+        """Initialize the synchronous SDK behind an async adapter."""
+        self._solver = solver or TwoCaptcha(api_key)
+
+    async def recaptcha(
+        self,
+        *,
+        sitekey: str,
+        url: str,
+        enterprise: int,
+        invisible: int,
+        userAgent: str,  # noqa: N803 - 2Captcha's public argument name
+    ) -> dict[str, object]:
+        """Solve the challenge in a worker thread and return its result."""
+        return await asyncio.to_thread(
+            self._solver.recaptcha,
+            sitekey=sitekey,
+            url=url,
+            enterprise=enterprise,
+            invisible=invisible,
+            userAgent=userAgent,
+        )
 
 
 @dataclass(slots=True)
@@ -297,7 +349,7 @@ class CanalClient:
             raise ValueError(msg)
         self._session = session
         self._credentials = credentials
-        self._captcha_solver = captcha_solver or AsyncTwoCaptcha(
+        self._captcha_solver = captcha_solver or _ThreadedTwoCaptcha(
             credentials.captcha_api_key
         )
         self._base_url = base_url.rstrip("/")
@@ -339,6 +391,43 @@ class CanalClient:
             self._history_days,
             self._correction_days,
         )
+        for attempt in range(2):
+            try:
+                snapshot = await self._async_fetch_consumption_once(previous)
+            except _CanalSessionExpiredError:
+                if attempt == 1:
+                    _LOGGER.exception(
+                        "The Canal portal session repeatedly expired during the "
+                        "%s scrape",
+                        sync_type,
+                    )
+                    msg = (
+                        "The Canal portal session repeatedly expired during "
+                        "synchronization"
+                    )
+                    raise CanalConnectionError(msg) from None
+                _LOGGER.warning(
+                    "The Canal portal session expired during the %s scrape; "
+                    "restarting once with a fresh login and CAPTCHA",
+                    sync_type,
+                )
+                continue
+
+            _LOGGER.info(
+                "Completed %s portal scrape in %.1f seconds",
+                sync_type,
+                monotonic() - started,
+            )
+            return snapshot
+
+        msg = "The Canal portal synchronization retry loop ended unexpectedly"
+        raise CanalConnectionError(msg)
+
+    async def _async_fetch_consumption_once(
+        self,
+        previous: ConsumptionSnapshot | None,
+    ) -> ConsumptionSnapshot:
+        """Fetch one complete snapshot using the current portal session."""
         initial_page = await self._authenticated_consumption_page()
         initial_parser = self._parse_page(initial_page)
         references, original_contract = self._contract_references(initial_parser)
@@ -390,16 +479,10 @@ class CanalClient:
                 )
                 await self._switch_contract(original)
 
-        snapshot = ConsumptionSnapshot(
+        return ConsumptionSnapshot(
             contracts=contracts,
             fetched_at=datetime.now(UTC),
         )
-        _LOGGER.info(
-            "Completed %s portal scrape in %.1f seconds",
-            sync_type,
-            monotonic() - started,
-        )
-        return snapshot
 
     async def _collect_contract(
         self,
@@ -644,7 +727,7 @@ class CanalClient:
         )
         if redirects_to_login or self._is_login_page(result.text):
             msg = "The Canal portal session expired while switching contracts"
-            raise CanalAuthenticationError(msg)
+            raise _CanalSessionExpiredError(msg)
         _LOGGER.debug("The Canal portal contract switch completed")
 
     async def _query_consumption(
@@ -702,7 +785,7 @@ class CanalClient:
         )
         if result.status in _REDIRECT_STATUSES or self._is_login_page(result.text):
             msg = "The Canal portal session expired during synchronization"
-            raise CanalAuthenticationError(msg)
+            raise _CanalSessionExpiredError(msg)
         _LOGGER.debug(
             "Completed the %s consumption query from %s through %s",
             frequency_label,

@@ -8,7 +8,7 @@ Integración personalizada de Home Assistant para consultar automáticamente el 
 ## Funciones
 
 - Inicio de sesión automático con NIF/NIE y contraseña.
-- Resolución del reCAPTCHA invisible mediante 2Captcha.
+- Resolución del reCAPTCHA invisible mediante 2Captcha en cada inicio o renovación de sesión que lo necesite, sin bloquear el event loop de Home Assistant.
 - Detección automática de todos los contratos de la cuenta.
 - Descarga inicial de aproximadamente seis meses de consumos diarios y horarios.
 - Alta inmediata en Home Assistant y sincronización inicial en segundo plano.
@@ -102,6 +102,7 @@ La integración reconstruye el histórico acumulado anclándolo a la lectura fí
 - El historial se guarda mediante el almacenamiento privado y atómico de Home Assistant.
 - La sincronización se ejecuta una vez al día a las 03:00, salvo que se cambie desde **Configurar**.
 - Si el portal rechaza el acceso, Home Assistant inicia una reautenticación.
+- Si la sesión del portal caduca durante la descarga, la integración inicia una sesión nueva con CAPTCHA y reintenta el snapshot completo una vez.
 
 ## Registros
 

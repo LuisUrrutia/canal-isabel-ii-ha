@@ -5,11 +5,13 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
+from threading import get_ident
 
 import pytest
 from aiohttp import web
 from pytest_aiohttp.plugin import AiohttpClient
 
+from custom_components.canal_de_isabel_ii import client as client_module
 from custom_components.canal_de_isabel_ii.client import (
     CanalAuthenticationError,
     CanalCaptchaError,
@@ -115,6 +117,8 @@ class PortalState:
     daily_chart_override: str | None = None
     hourly_chart_override: str | None = None
     redirect_queries: bool = False
+    expire_query_once: bool = False
+    expire_switch_once: bool = False
 
 
 def _login_page() -> str:
@@ -223,7 +227,7 @@ def _chart_page(
     )
 
 
-async def make_client(  # noqa: PLR0913 - explicit test-adapter controls
+async def make_client(  # noqa: C901, PLR0913 - explicit portal adapter controls
     aiohttp_client: AiohttpClient,
     state: PortalState,
     *,
@@ -271,6 +275,11 @@ async def make_client(  # noqa: PLR0913 - explicit test-adapter controls
             "",
         )
         if request.method == "POST" and action.endswith("contratoPorDefecto"):
+            if state.expire_switch_once:
+                state.expire_switch_once = False
+                state.authenticated = False
+                location = "/web/ovir"
+                raise web.HTTPFound(location)
             payload = await request.post()
             contract_id = next(
                 str(value)
@@ -283,7 +292,13 @@ async def make_client(  # noqa: PLR0913 - explicit test-adapter controls
             raise web.HTTPFound(location)
 
         if request.method == "POST" and action.endswith("buscarForm"):
+            if state.expire_query_once:
+                state.expire_query_once = False
+                state.authenticated = False
+                location = "/web/ovir"
+                raise web.HTTPFound(location)
             if state.redirect_queries:
+                state.authenticated = False
                 location = "/web/ovir"
                 raise web.HTTPFound(location)
             payload = await request.post()
@@ -334,6 +349,38 @@ async def make_client(  # noqa: PLR0913 - explicit test-adapter controls
 
 
 @pytest.mark.asyncio
+async def test_default_captcha_solver_runs_outside_the_event_loop() -> None:
+    """The blocking 2Captcha SDK must never block Home Assistant's event loop."""
+
+    class BlockingSolver:
+        def __init__(self) -> None:
+            self.thread_id: int | None = None
+
+        def recaptcha(self, **_kwargs: object) -> dict[str, object]:
+            self.thread_id = get_ident()
+            return {"code": "captcha-token"}
+
+    blocking_solver = BlockingSolver()
+    adapter = client_module._ThreadedTwoCaptcha(  # noqa: SLF001
+        "api-key",
+        solver=blocking_solver,
+    )
+    event_loop_thread = get_ident()
+
+    result = await adapter.recaptcha(
+        sitekey="public-site-key",
+        url="https://example.test/login",
+        enterprise=1,
+        invisible=1,
+        userAgent="test-agent",
+    )
+
+    assert result == {"code": "captcha-token"}
+    assert blocking_solver.thread_id is not None
+    assert blocking_solver.thread_id != event_loop_thread
+
+
+@pytest.mark.asyncio
 async def test_fetch_consumption_owns_login_contracts_and_history(
     aiohttp_client: AiohttpClient,
     socket_enabled: None,
@@ -351,7 +398,7 @@ async def test_fetch_consumption_owns_login_contracts_and_history(
             "url": str(client.login_url),
             "enterprise": 1,
             "invisible": 1,
-            "userAgent": "Canal-Isabel-II-Home-Assistant/3.1",
+            "userAgent": "Canal-Isabel-II-Home-Assistant/3.1.1",
         }
     ]
     assert state.login_payload["_login_tipoUsuario"] == "PARTICULAR"
@@ -693,11 +740,11 @@ async def test_changed_graph_labels_fail_explicitly(
 
 
 @pytest.mark.asyncio
-async def test_session_expiry_during_query_requests_reauthentication(
+async def test_persistent_session_expiry_is_a_retryable_connection_failure(
     aiohttp_client: AiohttpClient,
     socket_enabled: None,
 ) -> None:
-    """A mid-sync redirect remains an authentication failure."""
+    """Repeated mid-sync expiry does not claim the credentials are invalid."""
     state = PortalState(
         authenticated=True,
         contracts={"contract-a": CONTRACTS["contract-a"]},
@@ -705,5 +752,42 @@ async def test_session_expiry_during_query_requests_reauthentication(
     )
     client, _ = await make_client(aiohttp_client, state)
 
-    with pytest.raises(CanalAuthenticationError, match="expired"):
+    with pytest.raises(CanalConnectionError, match="repeatedly expired"):
         await client.async_fetch_consumption()
+
+
+@pytest.mark.asyncio
+async def test_one_session_expiry_reauthenticates_and_retries_the_sync(
+    aiohttp_client: AiohttpClient,
+    socket_enabled: None,
+) -> None:
+    """A one-off mid-sync expiry performs a fresh CAPTCHA login and recovers."""
+    state = PortalState(
+        contracts={"contract-a": CONTRACTS["contract-a"]},
+        expire_query_once=True,
+    )
+    client, solver = await make_client(aiohttp_client, state, history_days=1)
+
+    snapshot = await client.async_fetch_consumption()
+
+    assert isinstance(solver, FakeCaptchaSolver)
+    assert len(solver.calls) == 2
+    assert len(snapshot.contracts["contract-a"].daily_readings) == 1
+    assert len(snapshot.contracts["contract-a"].hourly_readings) == 24
+
+
+@pytest.mark.asyncio
+async def test_contract_switch_expiry_also_reauthenticates_and_retries(
+    aiohttp_client: AiohttpClient,
+    socket_enabled: None,
+) -> None:
+    """A switch redirect uses the same fresh CAPTCHA login recovery path."""
+    state = PortalState(expire_switch_once=True)
+    client, solver = await make_client(aiohttp_client, state, history_days=1)
+
+    snapshot = await client.async_fetch_consumption()
+
+    assert isinstance(solver, FakeCaptchaSolver)
+    assert len(solver.calls) == 2
+    assert set(snapshot.contracts) == set(CONTRACTS)
+    assert state.active_contract == "contract-a"
