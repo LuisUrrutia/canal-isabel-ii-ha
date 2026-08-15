@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from calendar import monthrange
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from html.parser import HTMLParser
 from http import HTTPStatus
+from time import monotonic
 from typing import TYPE_CHECKING, Protocol
 from urllib.parse import parse_qs, parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 from zoneinfo import ZoneInfo
@@ -28,11 +30,12 @@ if TYPE_CHECKING:
 
 _PORTAL_TIME_ZONE = ZoneInfo("Europe/Madrid")
 _REQUEST_TIMEOUT = ClientTimeout(total=45)
-_USER_AGENT = "Canal-Isabel-II-Home-Assistant/3.0"
+_USER_AGENT = "Canal-Isabel-II-Home-Assistant/3.1"
 _LOGIN_PATH = "/web/ovir"
 _DEFAULT_HISTORY_DAYS = 183
 _DEFAULT_CORRECTION_DAYS = 2
 _REDIRECT_STATUSES = {301, 302, 303, 307, 308}
+_LOGGER = logging.getLogger(__name__)
 
 _SITE_KEY_RE = re.compile(
     r"['\"]sitekey['\"]\s*:\s*['\"](?P<sitekey>[^'\"]+)['\"]",
@@ -314,23 +317,48 @@ class CanalClient:
 
     async def async_validate_credentials(self) -> None:
         """Validate login without starting the expensive historical sync."""
+        started = monotonic()
+        _LOGGER.info("Starting standalone Canal credential validation")
         await self._authenticated_consumption_page()
+        _LOGGER.info(
+            "Completed standalone Canal credential validation in %.1f seconds",
+            monotonic() - started,
+        )
 
     async def async_fetch_consumption(
         self,
         previous: ConsumptionSnapshot | None = None,
     ) -> ConsumptionSnapshot:
         """Return a normalized, merged history for every account contract."""
+        started = monotonic()
+        sync_type = "incremental" if previous is not None else "initial"
+        _LOGGER.info(
+            "Starting %s portal scrape with a %d-day history window and a "
+            "%d-day correction window",
+            sync_type,
+            self._history_days,
+            self._correction_days,
+        )
         initial_page = await self._authenticated_consumption_page()
         initial_parser = self._parse_page(initial_page)
         references, original_contract = self._contract_references(initial_parser)
+        _LOGGER.info("The Canal portal reported %d contract(s)", len(references))
         contracts: dict[str, ContractConsumption] = {}
         current_contract = original_contract
 
         try:
-            for reference in references:
+            for contract_number, reference in enumerate(references, start=1):
+                _LOGGER.info(
+                    "Synchronizing Canal contract %d of %d",
+                    contract_number,
+                    len(references),
+                )
                 page = initial_page
                 if reference.contract_id != current_contract:
+                    _LOGGER.debug(
+                        "Switching the active portal contract for contract %d",
+                        contract_number,
+                    )
                     await self._switch_contract(reference)
                     current_contract = reference.contract_id
                     page = await self._authenticated_consumption_page()
@@ -345,14 +373,33 @@ class CanalClient:
                     reference.contract_id,
                     prior,
                 )
+                contract = contracts[reference.contract_id]
+                _LOGGER.info(
+                    "Completed Canal contract %d of %d: %d daily and %d hourly "
+                    "readings",
+                    contract_number,
+                    len(references),
+                    len(contract.daily_readings),
+                    len(contract.hourly_readings),
+                )
         finally:
             if current_contract != original_contract:
+                _LOGGER.debug("Restoring the original active Canal contract")
                 original = next(
                     ref for ref in references if ref.contract_id == original_contract
                 )
                 await self._switch_contract(original)
 
-        return ConsumptionSnapshot(contracts=contracts, fetched_at=datetime.now(UTC))
+        snapshot = ConsumptionSnapshot(
+            contracts=contracts,
+            fetched_at=datetime.now(UTC),
+        )
+        _LOGGER.info(
+            "Completed %s portal scrape in %.1f seconds",
+            sync_type,
+            monotonic() - started,
+        )
+        return snapshot
 
     async def _collect_contract(
         self,
@@ -367,7 +414,24 @@ class CanalClient:
         refresh_start = self._refresh_start(previous, history_start)
 
         daily: list[DailyConsumption] = []
-        for range_start, range_end in _month_ranges(refresh_start, max_day):
+        month_ranges = tuple(_month_ranges(refresh_start, max_day))
+        _LOGGER.debug(
+            "Querying daily consumption from %s through %s in %d monthly request(s)",
+            refresh_start,
+            max_day,
+            len(month_ranges),
+        )
+        for range_number, (range_start, range_end) in enumerate(
+            month_ranges,
+            start=1,
+        ):
+            _LOGGER.debug(
+                "Querying daily range %d of %d: %s through %s",
+                range_number,
+                len(month_ranges),
+                range_start,
+                range_end,
+            )
             response = await self._query_consumption(
                 form,
                 contract_id,
@@ -383,7 +447,19 @@ class CanalClient:
         )
         if self._hourly_history_days is not None:
             hourly_days = hourly_days[-self._hourly_history_days :]
-        for day in hourly_days:
+        _LOGGER.info(
+            "Daily history returned %d day(s); querying %d day(s) of hourly "
+            "consumption",
+            len(daily),
+            len(hourly_days),
+        )
+        for day_number, day in enumerate(hourly_days, start=1):
+            _LOGGER.debug(
+                "Querying hourly consumption for day %d of %d: %s",
+                day_number,
+                len(hourly_days),
+                day,
+            )
             response = await self._query_consumption(
                 form,
                 contract_id,
@@ -434,14 +510,22 @@ class CanalClient:
     async def _authenticated_consumption_page(self) -> str:
         result = await self._request_text("GET", self._consumption_url)
         if result.status in _REDIRECT_STATUSES or self._is_login_page(result.text):
+            _LOGGER.info(
+                "The Canal portal session is not authenticated; starting automatic "
+                "login"
+            )
             await self._login()
             result = await self._request_text("GET", self._consumption_url)
         if result.status in _REDIRECT_STATUSES or self._is_login_page(result.text):
+            _LOGGER.error("The Canal portal rejected the automatic login")
             msg = "The Canal de Isabel II portal rejected the account credentials"
             raise CanalAuthenticationError(msg)
+        _LOGGER.debug("An authenticated Canal consumption page is available")
         return result.text
 
     async def _login(self) -> None:
+        started = monotonic()
+        _LOGGER.debug("Loading the Canal login form")
         login_page = await self._request_text("GET", self._login_url)
         parser = self._parse_page(login_page.text)
         form = next(
@@ -455,6 +539,8 @@ class CanalClient:
             msg = "The portal login page has no reCAPTCHA site key"
             raise CanalInvalidResponseError(msg)
 
+        captcha_started = monotonic()
+        _LOGGER.info("Requesting an invisible enterprise reCAPTCHA solution")
         try:
             solved = await self._captcha_solver.recaptcha(
                 sitekey=match.group("sitekey"),
@@ -464,12 +550,25 @@ class CanalClient:
                 userAgent=_USER_AGENT,
             )
             token = str(solved["code"]).strip()
-        except Exception as err:
+        except Exception as err:  # noqa: BLE001 - third-party solver exceptions vary
+            _LOGGER.error(  # noqa: TRY400 - solver tracebacks may contain secrets
+                "The reCAPTCHA solver failed after %.1f seconds (%s)",
+                monotonic() - captcha_started,
+                type(err).__name__,
+            )
             msg = "2Captcha could not solve the Canal login challenge"
-            raise CanalCaptchaError(msg) from err
+            raise CanalCaptchaError(msg) from None
         if not token:
+            _LOGGER.error(
+                "The reCAPTCHA solver returned an empty solution after %.1f seconds",
+                monotonic() - captcha_started,
+            )
             msg = "2Captcha returned an empty Canal login token"
             raise CanalCaptchaError(msg)
+        _LOGGER.info(
+            "Received a reCAPTCHA solution in %.1f seconds",
+            monotonic() - captcha_started,
+        )
 
         password_name = next(
             (name for name in form.values if name.endswith("password")),
@@ -503,10 +602,16 @@ class CanalClient:
             },
         )
         if result.status not in _REDIRECT_STATUSES and self._is_login_page(result.text):
+            _LOGGER.error("The Canal portal rejected the submitted credentials")
             msg = "The Canal de Isabel II portal rejected the account credentials"
             raise CanalAuthenticationError(msg)
+        _LOGGER.info(
+            "Completed automatic Canal login in %.1f seconds",
+            monotonic() - started,
+        )
 
     async def _switch_contract(self, reference: _ContractReference) -> None:
+        _LOGGER.debug("Submitting a Canal portal contract switch request")
         split = urlsplit(urljoin(self._base_url, reference.switch_href))
         query = parse_qsl(split.query, keep_blank_values=True)
         contract_key = next(key for key, _ in query if key.endswith("contratoId"))
@@ -540,6 +645,7 @@ class CanalClient:
         if redirects_to_login or self._is_login_page(result.text):
             msg = "The Canal portal session expired while switching contracts"
             raise CanalAuthenticationError(msg)
+        _LOGGER.debug("The Canal portal contract switch completed")
 
     async def _query_consumption(
         self,
@@ -549,6 +655,13 @@ class CanalClient:
         end: date,
         frequency: str,
     ) -> str:
+        frequency_label = "daily" if frequency == "Diaria" else "hourly"
+        _LOGGER.debug(
+            "Preparing a %s consumption query from %s through %s",
+            frequency_label,
+            start,
+            end,
+        )
         payload = dict(form.values)
         payload.update(
             {
@@ -590,6 +703,12 @@ class CanalClient:
         if result.status in _REDIRECT_STATUSES or self._is_login_page(result.text):
             msg = "The Canal portal session expired during synchronization"
             raise CanalAuthenticationError(msg)
+        _LOGGER.debug(
+            "Completed the %s consumption query from %s through %s",
+            frequency_label,
+            start,
+            end,
+        )
         return result.text
 
     async def _request_text(
@@ -600,6 +719,9 @@ class CanalClient:
         data: object | None = None,
         headers: dict[str, str] | None = None,
     ) -> _HttpResult:
+        request_started = monotonic()
+        safe_path = urlsplit(url).path
+        _LOGGER.debug("Starting portal request: %s %s", method, safe_path)
         request_headers = {"User-Agent": _USER_AGENT, **(headers or {})}
         try:
             response = await self._session.request(
@@ -611,13 +733,36 @@ class CanalClient:
                 data=data,
             )
         except (TimeoutError, ClientError) as err:
+            _LOGGER.warning(
+                "Portal request failed after %.1f seconds: %s %s (%s)",
+                monotonic() - request_started,
+                method,
+                safe_path,
+                type(err).__name__,
+            )
             msg = "Unable to communicate with the Canal de Isabel II portal"
-            raise CanalConnectionError(msg) from err
+            raise CanalConnectionError(msg) from None
         async with response:
             text = await response.text()
             if response.status >= HTTPStatus.BAD_REQUEST:
+                _LOGGER.warning(
+                    "Portal request returned HTTP %d after %.1f seconds: %s %s",
+                    response.status,
+                    monotonic() - request_started,
+                    method,
+                    safe_path,
+                )
                 msg = f"The Canal de Isabel II portal returned HTTP {response.status}"
                 raise CanalConnectionError(msg)
+            _LOGGER.debug(
+                "Completed portal request in %.1f seconds: %s %s returned HTTP %d "
+                "with %d response characters",
+                monotonic() - request_started,
+                method,
+                safe_path,
+                response.status,
+                len(text),
+            )
             return _HttpResult(
                 status=response.status,
                 text=text,

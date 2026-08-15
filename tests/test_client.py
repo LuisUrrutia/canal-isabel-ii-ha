@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 
@@ -350,7 +351,7 @@ async def test_fetch_consumption_owns_login_contracts_and_history(
             "url": str(client.login_url),
             "enterprise": 1,
             "invisible": 1,
-            "userAgent": "Canal-Isabel-II-Home-Assistant/3.0",
+            "userAgent": "Canal-Isabel-II-Home-Assistant/3.1",
         }
     ]
     assert state.login_payload["_login_tipoUsuario"] == "PARTICULAR"
@@ -377,6 +378,42 @@ async def test_fetch_consumption_owns_login_contracts_and_history(
     assert len(state.queries) == 6
     assert [query["periodicidad"] for query in state.queries].count("Diaria") == 2
     assert [query["periodicidad"] for query in state.queries].count("Horaria") == 4
+
+
+@pytest.mark.asyncio
+async def test_debug_logs_report_progress_without_secrets(
+    aiohttp_client: AiohttpClient,
+    socket_enabled: None,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Detailed scrape logs remain useful and safe to share after review."""
+    caplog.set_level(
+        logging.DEBUG,
+        logger="custom_components.canal_de_isabel_ii.client",
+    )
+    state = PortalState(contracts={"contract-a": CONTRACTS["contract-a"]})
+    client, _ = await make_client(aiohttp_client, state, history_days=1)
+
+    await client.async_fetch_consumption()
+
+    messages = "\n".join(
+        record.getMessage()
+        for record in caplog.records
+        if record.name == "custom_components.canal_de_isabel_ii.client"
+    )
+    assert "Starting initial portal scrape" in messages
+    assert "Requesting an invisible enterprise reCAPTCHA solution" in messages
+    assert "Synchronizing Canal contract 1 of 1" in messages
+    assert "Querying hourly consumption for day 1 of 1" in messages
+    assert "Completed initial portal scrape" in messages
+    for secret in (
+        "X1234567L",
+        "secret",
+        "api-key",
+        "captcha-token",
+        "contract-a",
+    ):
+        assert secret not in messages
 
 
 @pytest.mark.asyncio
@@ -446,11 +483,11 @@ async def test_fetch_consumption_refreshes_only_recent_history(
 
 
 @pytest.mark.asyncio
-async def test_validate_credentials_stops_before_consumption_backfill(
+async def test_standalone_validation_stops_before_consumption_backfill(
     aiohttp_client: AiohttpClient,
     socket_enabled: None,
 ) -> None:
-    """The config flow validates login without performing the expensive sync."""
+    """Standalone validation can check login without the expensive sync."""
     state = PortalState()
     client, _ = await make_client(aiohttp_client, state)
 

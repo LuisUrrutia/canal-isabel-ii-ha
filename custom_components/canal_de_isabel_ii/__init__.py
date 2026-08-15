@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING
 
 from aiohttp import CookieJar
@@ -32,6 +33,7 @@ if TYPE_CHECKING:
 
 _PLATFORMS = (Platform.SENSOR,)
 _CREDENTIAL_KEYS = {CONF_USERNAME, CONF_PASSWORD, CONF_CAPTCHA_API_KEY}
+_LOGGER = logging.getLogger(__name__)
 
 
 async def async_migrate_entry(
@@ -40,6 +42,11 @@ async def async_migrate_entry(
 ) -> bool:
     """Migrate legacy session-based entries to unattended authentication."""
     if entry.version > CONFIG_ENTRY_VERSION:
+        _LOGGER.error(
+            "Cannot migrate Canal config entry %s from unsupported version %s",
+            entry.entry_id,
+            entry.version,
+        )
         return False
 
     if entry.version < CONFIG_ENTRY_VERSION:
@@ -49,6 +56,12 @@ async def async_migrate_entry(
             minor_version=CONFIG_ENTRY_MINOR_VERSION,
             unique_id=entry.unique_id or DOMAIN,
         )
+        _LOGGER.info(
+            "Migrated Canal config entry %s to version %s.%s",
+            entry.entry_id,
+            CONFIG_ENTRY_VERSION,
+            CONFIG_ENTRY_MINOR_VERSION,
+        )
     return True
 
 
@@ -57,7 +70,13 @@ async def async_setup_entry(
     entry: CanalConfigEntry,
 ) -> bool:
     """Set up one Canal account and its daily synchronization."""
+    _LOGGER.info("Starting setup for Canal config entry %s", entry.entry_id)
     if not _CREDENTIAL_KEYS.issubset(entry.data):
+        _LOGGER.warning(
+            "Canal config entry %s is missing credentials and requires "
+            "reauthentication",
+            entry.entry_id,
+        )
         msg = "Account credentials are required after upgrading"
         raise ConfigEntryAuthFailed(msg)
 
@@ -91,6 +110,18 @@ async def async_setup_entry(
     )
     entry.async_on_unload(entry.add_update_listener(_async_reload_on_update))
     await hass.config_entries.async_forward_entry_setups(entry, _PLATFORMS)
+    entry.async_create_background_task(
+        hass,
+        coordinator.async_request_refresh(),
+        "Canal initial synchronization",
+    )
+    _LOGGER.info(
+        "Finished setup for Canal config entry %s; initial synchronization is "
+        "running in the background and daily synchronization is scheduled for "
+        "%02d:00",
+        entry.entry_id,
+        sync_hour,
+    )
     return True
 
 
@@ -99,6 +130,7 @@ async def _async_reload_on_update(
     entry: ConfigEntry,
 ) -> None:
     """Reload after credentials or synchronization options change."""
+    _LOGGER.info("Reloading Canal config entry %s after an update", entry.entry_id)
     await hass.config_entries.async_reload(entry.entry_id)
 
 
@@ -107,7 +139,14 @@ async def async_unload_entry(
     entry: CanalConfigEntry,
 ) -> bool:
     """Unload the config entry and its platforms."""
-    return await hass.config_entries.async_unload_platforms(entry, _PLATFORMS)
+    _LOGGER.info("Unloading Canal config entry %s", entry.entry_id)
+    unloaded = await hass.config_entries.async_unload_platforms(entry, _PLATFORMS)
+    _LOGGER.info(
+        "Finished unloading Canal config entry %s (success: %s)",
+        entry.entry_id,
+        unloaded,
+    )
+    return unloaded
 
 
 async def async_remove_entry(
@@ -115,4 +154,5 @@ async def async_remove_entry(
     entry: CanalConfigEntry,
 ) -> None:
     """Delete private consumption history with its account entry."""
+    _LOGGER.info("Removing private history for Canal config entry %s", entry.entry_id)
     await CanalHistoryStore(hass, entry.entry_id).async_remove()

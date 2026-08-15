@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import date, datetime
 from typing import TYPE_CHECKING, Any
 
@@ -19,6 +20,7 @@ if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
 
 _STORAGE_VERSION = 1
+_LOGGER = logging.getLogger(__name__)
 
 
 class CanalHistoryStore:
@@ -38,21 +40,36 @@ class CanalHistoryStore:
         """Load normalized history, ignoring obsolete or malformed data."""
         payload = await self._store.async_load()
         if payload is None:
+            _LOGGER.debug("No private Canal history cache was found")
             return None
         try:
             contracts = {
                 item["contract_id"]: _decode_contract(item)
                 for item in payload["contracts"]
             }
-            return ConsumptionSnapshot(
+            snapshot = ConsumptionSnapshot(
                 contracts=contracts,
                 fetched_at=datetime.fromisoformat(payload["fetched_at"]),
             )
-        except KeyError, TypeError, ValueError:
+        except (KeyError, TypeError, ValueError) as err:
+            _LOGGER.warning(
+                "Ignoring malformed private Canal history cache; a fresh "
+                "background synchronization will rebuild it"
+            )
+            _LOGGER.debug("Cache decoding failure: %s", err, exc_info=True)
             return None
+        _LOGGER.debug(
+            "Decoded private Canal history cache containing %d contract(s)",
+            len(snapshot.contracts),
+        )
+        return snapshot
 
     async def async_save(self, snapshot: ConsumptionSnapshot) -> None:
         """Persist one complete atomic snapshot."""
+        _LOGGER.debug(
+            "Saving private Canal history cache containing %d contract(s)",
+            len(snapshot.contracts),
+        )
         await self._store.async_save(
             {
                 "fetched_at": snapshot.fetched_at.isoformat(),
@@ -62,10 +79,12 @@ class CanalHistoryStore:
                 ],
             }
         )
+        _LOGGER.debug("Private Canal history cache saved successfully")
 
     async def async_remove(self) -> None:
         """Remove private history when its config entry is deleted."""
         await self._store.async_remove()
+        _LOGGER.info("Private Canal history cache removed")
 
 
 def _encode_contract(contract: ContractConsumption) -> dict[str, Any]:

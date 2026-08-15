@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, time, timedelta
 from typing import TYPE_CHECKING, Any, override
 from zoneinfo import ZoneInfo
@@ -34,6 +35,7 @@ if TYPE_CHECKING:
 
 PARALLEL_UPDATES = 0
 _PORTAL_TIME_ZONE = ZoneInfo("Europe/Madrid")
+_LOGGER = logging.getLogger(__name__)
 
 
 async def async_setup_entry(
@@ -48,9 +50,20 @@ async def async_setup_entry(
 
     @callback
     def async_add_new_contracts() -> None:
-        new_contracts = set(coordinator.data.contracts) - known_contracts
+        snapshot = coordinator.data
+        if snapshot is None:
+            _LOGGER.debug(
+                "No Canal snapshot is available yet; waiting to discover contracts"
+            )
+            return
+        new_contracts = set(snapshot.contracts) - known_contracts
         if not new_contracts:
             return
+        _LOGGER.info(
+            "Adding %d newly discovered Canal contract(s) as %d sensor entities",
+            len(new_contracts),
+            len(new_contracts) * 3,
+        )
         async_add_entities(
             entity
             for contract_id in sorted(new_contracts)
@@ -192,6 +205,10 @@ class CanalMeterReadingSensor(CanalContractSensor):
         if not statistics:
             return
 
+        _LOGGER.debug(
+            "Importing %d historical water meter statistic point(s)",
+            len(statistics),
+        )
         metadata = StatisticMetaData(
             mean_type=StatisticMeanType.NONE,
             has_sum=True,

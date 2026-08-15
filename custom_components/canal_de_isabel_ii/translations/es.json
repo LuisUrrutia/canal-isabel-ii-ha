@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "Conectar con Canal de Isabel II",
-        "description": "Introduce tus credenciales de la Oficina Virtual y una clave API de 2Captcha. 2Captcha es un servicio de pago de terceros que solo se utiliza cuando el portal solicita su reCAPTCHA invisible.",
+        "description": "Introduce tus credenciales de la Oficina Virtual y una clave API de 2Captcha. 2Captcha es un servicio de pago de terceros que solo se utiliza cuando el portal solicita su reCAPTCHA invisible. La integración se guarda inmediatamente; la validación del acceso y la sincronización inicial continúan en segundo plano. Las entidades aparecerán tras la primera sincronización correcta.",
         "data": {
           "username": "NIF o NIE",
           "password": "Contraseña de la Oficina Virtual",
@@ -12,7 +12,7 @@
       },
       "reauth_confirm": {
         "title": "Es necesario iniciar sesión",
-        "description": "El inicio de sesión automático ha fallado. Comprueba las credenciales de la Oficina Virtual y la clave API de 2Captcha.",
+        "description": "El inicio de sesión automático ha fallado. Introduce las credenciales corregidas y la clave API de 2Captcha. Se guardarán inmediatamente y se comprobarán en segundo plano.",
         "data": {
           "username": "NIF o NIE",
           "password": "Contraseña de la Oficina Virtual",
@@ -21,7 +21,7 @@
       },
       "reconfigure": {
         "title": "Actualizar las credenciales",
-        "description": "Sustituye las credenciales usadas para iniciar sesión automáticamente en la Oficina Virtual.",
+        "description": "Sustituye las credenciales usadas para iniciar sesión automáticamente en la Oficina Virtual. Se guardarán inmediatamente y se comprobarán en segundo plano.",
         "data": {
           "username": "NIF o NIE",
           "password": "Contraseña de la Oficina Virtual",
@@ -31,7 +31,7 @@
     },
     "error": {
       "cannot_connect": "No se ha podido conectar con el portal de Canal de Isabel II.",
-      "invalid_auth": "La Oficina Virtual ha rechazado el NIF/NIE o la contraseña.",
+      "invalid_auth": "Introduce el NIF/NIE, la contraseña de la Oficina Virtual y la clave API de 2Captcha.",
       "captcha_failed": "2Captcha no ha podido resolver el desafío del portal. Comprueba la clave API y el saldo de la cuenta.",
       "invalid_response": "El portal de Canal de Isabel II ha devuelto una respuesta no compatible."
     },

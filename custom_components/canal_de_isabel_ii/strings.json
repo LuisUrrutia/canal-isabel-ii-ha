@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "Connect to Canal de Isabel II",
-        "description": "Enter your Virtual Office credentials and a 2Captcha API key. 2Captcha is a paid third-party service used only when the portal requests its invisible reCAPTCHA.",
+        "description": "Enter your Virtual Office credentials and a 2Captcha API key. 2Captcha is a paid third-party service used only when the portal requests its invisible reCAPTCHA. The integration is saved immediately; login validation and the initial synchronization continue in the background. Entities appear after the first successful synchronization.",
         "data": {
           "username": "NIF or NIE",
           "password": "Virtual Office password",
@@ -12,7 +12,7 @@
       },
       "reauth_confirm": {
         "title": "Sign-in required",
-        "description": "Automatic sign-in failed. Check your Virtual Office credentials and 2Captcha API key.",
+        "description": "Automatic sign-in failed. Enter the corrected Virtual Office credentials and 2Captcha API key. They are saved immediately and checked in the background.",
         "data": {
           "username": "NIF or NIE",
           "password": "Virtual Office password",
@@ -21,7 +21,7 @@
       },
       "reconfigure": {
         "title": "Update account credentials",
-        "description": "Replace the credentials used for automatic Virtual Office sign-in.",
+        "description": "Replace the credentials used for automatic Virtual Office sign-in. They are saved immediately and checked in the background.",
         "data": {
           "username": "NIF or NIE",
           "password": "Virtual Office password",
@@ -31,7 +31,7 @@
     },
     "error": {
       "cannot_connect": "Unable to connect to the Canal de Isabel II portal.",
-      "invalid_auth": "The Virtual Office rejected the NIF/NIE or password.",
+      "invalid_auth": "Enter the NIF/NIE, Virtual Office password and 2Captcha API key.",
       "captcha_failed": "2Captcha could not solve the portal challenge. Check the API key and account balance.",
       "invalid_response": "The Canal de Isabel II portal returned an unsupported response."
     },

@@ -11,6 +11,7 @@ Integración personalizada de Home Assistant para consultar automáticamente el 
 - Resolución del reCAPTCHA invisible mediante 2Captcha.
 - Detección automática de todos los contratos de la cuenta.
 - Descarga inicial de aproximadamente seis meses de consumos diarios y horarios.
+- Alta inmediata en Home Assistant y sincronización inicial en segundo plano.
 - Historial privado persistente y sincronizaciones incrementales con corrección de los dos últimos días.
 - Sincronización diaria a una hora configurable (03:00 de forma predeterminada).
 - Un dispositivo por contrato y tres sensores: contador, consumo horario y consumo diario.
@@ -50,9 +51,9 @@ Integración personalizada de Home Assistant para consultar automáticamente el 
 3. Selecciona **Añadir integración** y busca **Canal de Isabel II**.
 4. Introduce el NIF o NIE, la contraseña de la Oficina Virtual y la clave API de 2Captcha.
 
-La integración valida el acceso y descubre todos los contratos disponibles en esa cuenta. Se pueden configurar varias cuentas; un mismo NIF/NIE no puede añadirse dos veces.
+Home Assistant guarda la integración inmediatamente. La validación del acceso, el descubrimiento de contratos y la primera descarga se ejecutan después en segundo plano. Se pueden configurar varias cuentas; un mismo NIF/NIE no puede añadirse dos veces. Si las credenciales o 2Captcha fallan, Home Assistant solicitará una reautenticación.
 
-La primera sincronización descarga hasta seis meses. Como el portal solo permite consultar los consumos horarios día a día, esta operación puede tardar varios minutos. Las sincronizaciones siguientes solo vuelven a consultar el tramo reciente.
+La primera sincronización descarga hasta seis meses. Como el portal solo permite consultar los consumos horarios día a día, esta operación puede tardar varios minutos. Durante ese tiempo la integración ya aparece en Home Assistant y las entidades se crean en cuanto se descubre el primer snapshot completo. Las sincronizaciones siguientes solo vuelven a consultar el tramo reciente.
 
 ## Prueba real desde CLI
 
@@ -102,6 +103,18 @@ La integración reconstruye el histórico acumulado anclándolo a la lectura fí
 - La sincronización se ejecuta una vez al día a las 03:00, salvo que se cambie desde **Configurar**.
 - Si el portal rechaza el acceso, Home Assistant inicia una reautenticación.
 
+## Registros
+
+La integración registra en inglés el alta, la carga de caché, la autenticación, la resolución del CAPTCHA, el progreso por contrato, los rangos diarios, cada día horario, el almacenamiento y la clasificación de errores. Los hitos y errores aparecen con el nivel normal; para ver el detalle de cada petición y consulta, añade temporalmente:
+
+```yaml
+logger:
+  logs:
+    custom_components.canal_de_isabel_ii: debug
+```
+
+Después reinicia Home Assistant y consulta **Ajustes > Sistema > Registros**. Las trazas de la integración no incluyen el NIF/NIE, la contraseña, la API key, tokens, cookies ni el HTML recibido. Aun así, revisa cualquier registro antes de publicarlo.
+
 ## Actualización desde una versión con `JSESSIONID`
 
 La versión 3 sustituye la cookie manual por el inicio de sesión automático. La entrada anterior se conserva, pero Home Assistant solicitará una vez el NIF/NIE, la contraseña y la clave API de 2Captcha. Después ya no será necesario copiar cookies.
@@ -136,7 +149,7 @@ Comprueba que la web permite abrir manualmente **Telelecturas**. Si funciona, de
 
 ### No aparece el histórico
 
-Comprueba que Recorder está habilitado y espera a que termine la primera sincronización. La descarga inicial hace una consulta por cada día disponible y puede tardar.
+Comprueba que Recorder está habilitado y espera a que termine la primera sincronización en segundo plano. La descarga inicial hace una consulta por cada día disponible y puede tardar. Activa temporalmente los registros de depuración anteriores para seguir su progreso.
 
 ## Eliminación
 

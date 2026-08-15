@@ -19,8 +19,9 @@ async def async_get_config_entry_diagnostics(
     coordinator = entry.runtime_data.coordinator
     snapshot = coordinator.data
     contracts = []
-    for contract_id in sorted(snapshot.contracts):
-        contract = snapshot.contracts[contract_id]
+    snapshot_contracts = snapshot.contracts if snapshot is not None else {}
+    for contract_id in sorted(snapshot_contracts):
+        contract = snapshot_contracts[contract_id]
         hourly = contract.hourly_readings
         daily = contract.daily_readings
         contracts.append(
@@ -54,8 +55,10 @@ async def async_get_config_entry_diagnostics(
             ),
         },
         "snapshot": {
-            "fetched_at": snapshot.fetched_at.isoformat(),
-            "contract_count": len(snapshot.contracts),
+            "fetched_at": (
+                snapshot.fetched_at.isoformat() if snapshot is not None else None
+            ),
+            "contract_count": len(snapshot_contracts),
             "contracts": contracts,
         },
     }

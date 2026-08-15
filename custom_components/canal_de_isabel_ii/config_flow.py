@@ -2,26 +2,19 @@
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING, Any, override
 
 import voluptuous as vol
-from aiohttp import CookieJar
 from homeassistant.config_entries import (
     ConfigEntry,
     ConfigFlow,
     ConfigFlowResult,
     OptionsFlow,
 )
-from homeassistant.helpers import aiohttp_client, selector
+from homeassistant.helpers import selector
 
-from .client import (
-    CanalAuthenticationError,
-    CanalCaptchaError,
-    CanalClient,
-    CanalConnectionError,
-    CanalCredentials,
-    CanalInvalidResponseError,
-)
+from .client import CanalCredentials
 from .const import (
     CONF_CAPTCHA_API_KEY,
     CONF_PASSWORD,
@@ -36,6 +29,8 @@ from .const import (
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
+
+_LOGGER = logging.getLogger(__name__)
 
 
 def _credentials_schema(
@@ -82,13 +77,17 @@ class CanalConfigFlow(ConfigFlow, domain=DOMAIN):
         if user_input is None:
             return self._show_credentials_form("user")
 
-        error = await self._async_credentials_error(user_input)
+        error = _credentials_error(user_input)
         if error is not None:
             return self._show_credentials_form("user", error, user_input)
 
         credentials = _credentials_from_input(user_input)
         await self.async_set_unique_id(credentials.normalized_username)
         self._abort_if_unique_id_configured()
+        _LOGGER.info(
+            "Saving Canal account configuration before starting background "
+            "authentication and synchronization"
+        )
         return self.async_create_entry(title=DEFAULT_NAME, data=user_input)
 
     @override
@@ -111,7 +110,7 @@ class CanalConfigFlow(ConfigFlow, domain=DOMAIN):
                 defaults=entry.data,
             )
 
-        error = await self._async_credentials_error(user_input)
+        error = _credentials_error(user_input)
         if error is not None:
             return self._show_credentials_form(
                 "reauth_confirm",
@@ -129,6 +128,10 @@ class CanalConfigFlow(ConfigFlow, domain=DOMAIN):
         )
         if configured is not None and configured.entry_id != entry.entry_id:
             return self.async_abort(reason="already_configured")
+        _LOGGER.info(
+            "Saving updated Canal account credentials; authentication will be "
+            "checked by the background synchronization"
+        )
         return self._update_credentials_and_abort(
             entry,
             user_input,
@@ -146,13 +149,17 @@ class CanalConfigFlow(ConfigFlow, domain=DOMAIN):
         if user_input is None:
             return self._show_credentials_form("reconfigure", defaults=entry.data)
 
-        error = await self._async_credentials_error(user_input)
+        error = _credentials_error(user_input)
         if error is not None:
             return self._show_credentials_form("reconfigure", error, user_input)
 
         credentials = _credentials_from_input(user_input)
         await self.async_set_unique_id(credentials.normalized_username)
         self._abort_if_unique_id_mismatch()
+        _LOGGER.info(
+            "Saving reconfigured Canal account credentials; authentication will "
+            "be checked by the background synchronization"
+        )
         return self._update_credentials_and_abort(
             entry,
             user_input,
@@ -176,35 +183,6 @@ class CanalConfigFlow(ConfigFlow, domain=DOMAIN):
         if not entry.update_listeners:
             self.hass.config_entries.async_schedule_reload(entry.entry_id)
         return self.async_abort(reason=reason)
-
-    async def _async_credentials_error(
-        self,
-        user_input: Mapping[str, Any],
-    ) -> str | None:
-        """Return a flow error key, or None when unattended login works."""
-        try:
-            credentials = _credentials_from_input(user_input)
-        except KeyError, ValueError:
-            return "invalid_auth"
-
-        session = aiohttp_client.async_create_clientsession(
-            self.hass,
-            auto_cleanup=False,
-            cookie_jar=CookieJar(),
-        )
-        try:
-            await CanalClient(session, credentials).async_validate_credentials()
-        except CanalAuthenticationError:
-            return "invalid_auth"
-        except CanalCaptchaError:
-            return "captcha_failed"
-        except CanalConnectionError:
-            return "cannot_connect"
-        except CanalInvalidResponseError:
-            return "invalid_response"
-        finally:
-            session.detach()
-        return None
 
     def _show_credentials_form(
         self,
@@ -266,3 +244,12 @@ def _credentials_from_input(user_input: Mapping[str, Any]) -> CanalCredentials:
         password=str(user_input[CONF_PASSWORD]),
         captcha_api_key=str(user_input[CONF_CAPTCHA_API_KEY]),
     )
+
+
+def _credentials_error(user_input: Mapping[str, Any]) -> str | None:
+    """Validate only local fields so configuration never waits on the portal."""
+    try:
+        _credentials_from_input(user_input)
+    except KeyError, ValueError:
+        return "invalid_auth"
+    return None

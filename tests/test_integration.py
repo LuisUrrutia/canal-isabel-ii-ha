@@ -1,5 +1,6 @@
 """Tests through the Home Assistant config-entry seam."""
 
+import asyncio
 from datetime import timedelta
 from unittest.mock import AsyncMock, patch
 
@@ -22,6 +23,7 @@ from pytest_homeassistant_custom_component.components.recorder.common import (
 from custom_components.canal_de_isabel_ii import async_migrate_entry, async_remove_entry
 from custom_components.canal_de_isabel_ii.client import (
     CanalAuthenticationError,
+    CanalCaptchaError,
     CanalConnectionError,
 )
 from custom_components.canal_de_isabel_ii.const import (
@@ -109,6 +111,54 @@ async def test_setup_creates_three_water_sensors(hass: HomeAssistant) -> None:
     assert hourly.attributes["reading_start"] == "2026-08-14T09:00:00+00:00"
     assert daily.state == "15.5"
     assert daily.attributes["reading_day"] == "2026-08-14"
+
+
+async def test_setup_finishes_while_initial_sync_runs_in_background(
+    hass: HomeAssistant,
+) -> None:
+    """Slow initial portal history must not block config-entry setup."""
+    entry = _entry()
+    entry.add_to_hass(hass)
+    fetch_started = asyncio.Event()
+    allow_fetch_to_finish = asyncio.Event()
+
+    async def slow_fetch(_previous: object) -> object:
+        fetch_started.set()
+        await allow_fetch_to_finish.wait()
+        return make_snapshot()
+
+    with (
+        patch(
+            "custom_components.canal_de_isabel_ii.client."
+            "CanalClient.async_fetch_consumption",
+            side_effect=slow_fetch,
+        ),
+        patch(
+            "custom_components.canal_de_isabel_ii.storage.CanalHistoryStore.async_load",
+            return_value=None,
+        ),
+        patch(
+            "custom_components.canal_de_isabel_ii.storage.CanalHistoryStore.async_save",
+            return_value=None,
+        ),
+    ):
+        setup_task = hass.async_create_task(
+            hass.config_entries.async_setup(entry.entry_id),
+            "test non-blocking Canal setup",
+        )
+        await asyncio.wait_for(fetch_started.wait(), timeout=1)
+        try:
+            await asyncio.wait_for(asyncio.shield(setup_task), timeout=0.25)
+            setup_finished_before_sync = True
+        except TimeoutError:
+            setup_finished_before_sync = False
+        finally:
+            allow_fetch_to_finish.set()
+            assert await setup_task
+            await hass.async_block_till_done()
+
+    assert setup_finished_before_sync
+    assert entry.state is ConfigEntryState.LOADED
 
 
 async def test_setup_backfills_meter_long_term_statistics(
@@ -255,10 +305,18 @@ async def test_legacy_entry_migrates_then_requests_reauthentication(
     assert flows[0]["context"]["source"] == "reauth"
 
 
+@pytest.mark.parametrize(
+    "failure",
+    [
+        CanalAuthenticationError("rejected"),
+        CanalCaptchaError("solver failed"),
+    ],
+)
 async def test_authentication_failure_starts_reauthentication(
     hass: HomeAssistant,
+    failure: Exception,
 ) -> None:
-    """A rejected automated login starts Home Assistant reauthentication."""
+    """A credential or CAPTCHA failure starts Home Assistant reauthentication."""
     entry = _entry()
     entry.add_to_hass(hass)
 
@@ -266,14 +324,14 @@ async def test_authentication_failure_starts_reauthentication(
         patch(
             "custom_components.canal_de_isabel_ii.client."
             "CanalClient.async_fetch_consumption",
-            side_effect=CanalAuthenticationError("rejected"),
+            side_effect=failure,
         ),
         patch(
             "custom_components.canal_de_isabel_ii.storage.CanalHistoryStore.async_load",
             return_value=None,
         ),
     ):
-        assert not await hass.config_entries.async_setup(entry.entry_id)
+        assert await hass.config_entries.async_setup(entry.entry_id)
         await hass.async_block_till_done()
 
     flows = hass.config_entries.flow.async_progress_by_handler(DOMAIN)
@@ -297,9 +355,10 @@ async def test_temporary_portal_failure_remains_retryable(hass: HomeAssistant) -
             return_value=None,
         ),
     ):
-        assert not await hass.config_entries.async_setup(entry.entry_id)
+        assert await hass.config_entries.async_setup(entry.entry_id)
         await hass.async_block_till_done()
 
+    assert entry.state is ConfigEntryState.LOADED
     assert hass.config_entries.flow.async_progress_by_handler(DOMAIN) == []
 
 
