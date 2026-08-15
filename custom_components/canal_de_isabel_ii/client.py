@@ -31,7 +31,7 @@ if TYPE_CHECKING:
 
 _PORTAL_TIME_ZONE = ZoneInfo("Europe/Madrid")
 _REQUEST_TIMEOUT = ClientTimeout(total=45)
-_USER_AGENT = "Canal-Isabel-II-Home-Assistant/3.1.1"
+_USER_AGENT = "Canal-Isabel-II-Home-Assistant/3.1.2"
 _LOGIN_PATH = "/web/ovir"
 _DEFAULT_HISTORY_DAYS = 183
 _DEFAULT_CORRECTION_DAYS = 2

@@ -2,6 +2,7 @@
 
 import asyncio
 from datetime import timedelta
+from itertools import pairwise
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -41,6 +42,7 @@ VALID_DATA = {
     CONF_PASSWORD: "secret",
     CONF_CAPTCHA_API_KEY: "captcha-key",
 }
+EXTERNAL_WATER_STATISTIC_ID = f"{DOMAIN}:water_meter_contract_123"
 
 
 @pytest.fixture
@@ -161,11 +163,11 @@ async def test_setup_finishes_while_initial_sync_runs_in_background(
     assert entry.state is ConfigEntryState.LOADED
 
 
-async def test_setup_backfills_meter_long_term_statistics(
+async def test_setup_backfills_dedicated_external_water_statistics(
     hass: HomeAssistant,
     recorder_mock: Recorder,
 ) -> None:
-    """Hourly history is anchored to the physical meter in Recorder."""
+    """Portal history never shares Recorder's automatic entity statistic."""
     entry = _entry()
     entry.add_to_hass(hass)
 
@@ -200,16 +202,20 @@ async def test_setup_backfills_meter_long_term_statistics(
         hass,
         snapshot.contracts["contract-123"].hourly_readings[0].start,
         None,
-        {meter_id},
+        {EXTERNAL_WATER_STATISTIC_ID},
         "hour",
         None,
         {"state", "sum"},
     )
 
-    rows = statistics[meter_id]
+    assert meter_id != EXTERNAL_WATER_STATISTIC_ID
+    rows = statistics[EXTERNAL_WATER_STATISTIC_ID]
     assert rows[0]["state"] == pytest.approx(125.497)
     assert rows[-1]["state"] == pytest.approx(125.5)
     assert rows[-1]["sum"] == pytest.approx(125.5)
+    assert all(
+        current["sum"] <= following["sum"] for current, following in pairwise(rows)
+    )
 
 
 async def test_cached_snapshot_is_used_for_incremental_refresh(

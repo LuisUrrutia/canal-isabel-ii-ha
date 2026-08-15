@@ -3,16 +3,10 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, time, timedelta
+from datetime import datetime, time
 from typing import TYPE_CHECKING, Any, override
 from zoneinfo import ZoneInfo
 
-from homeassistant.components.recorder.models import (
-    StatisticData,
-    StatisticMeanType,
-    StatisticMetaData,
-)
-from homeassistant.components.recorder.statistics import async_import_statistics
 from homeassistant.components.sensor import (
     SensorDeviceClass,
     SensorEntity,
@@ -22,10 +16,10 @@ from homeassistant.const import UnitOfVolume
 from homeassistant.core import callback
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
-from homeassistant.util.unit_conversion import VolumeConverter
 
 from .const import DOMAIN
 from .coordinator import CanalConfigEntry, CanalCoordinator
+from .statistics import CanalWaterStatisticsImporter
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
@@ -128,7 +122,10 @@ class CanalMeterReadingSensor(CanalContractSensor):
         """Initialize the cumulative meter sensor."""
         super().__init__(coordinator, contract_id)
         self._attr_unique_id = f"canal_ii_meter_{contract_id}"
-        self._last_imported_at: datetime | None = None
+        self._statistics = CanalWaterStatisticsImporter(
+            coordinator.hass,
+            contract_id,
+        )
 
     @property
     @override
@@ -156,70 +153,8 @@ class CanalMeterReadingSensor(CanalContractSensor):
         super()._handle_coordinator_update()
 
     def _import_historical_statistics(self) -> None:
-        """Anchor hourly history to the portal's physical meter reading."""
-        contract = self.contract
-        meter_value = contract.meter_reading_m3
-        meter_reading_at = contract.meter_reading_at
-        if (
-            "recorder" not in self.hass.config.components
-            or meter_value is None
-            or meter_reading_at is None
-        ):
-            return
-
-        eligible = tuple(
-            reading
-            for reading in contract.hourly_readings
-            if reading.start <= meter_reading_at
-        )
-        running = meter_value - sum(
-            reading.volume_liters / 1000 for reading in eligible
-        )
-        cutoff = (
-            self._last_imported_at - timedelta(days=2)
-            if self._last_imported_at is not None
-            else None
-        )
-        statistics: list[StatisticData] = []
-        for reading in eligible:
-            running += reading.volume_liters / 1000
-            if cutoff is None or reading.start >= cutoff:
-                statistics.append(
-                    StatisticData(
-                        start=reading.start,
-                        state=running,
-                        sum=running,
-                    )
-                )
-
-        if (cutoff is None or meter_reading_at >= cutoff) and (
-            not eligible or eligible[-1].start != meter_reading_at
-        ):
-            statistics.append(
-                StatisticData(
-                    start=meter_reading_at,
-                    state=meter_value,
-                    sum=meter_value,
-                )
-            )
-        if not statistics:
-            return
-
-        _LOGGER.debug(
-            "Importing %d historical water meter statistic point(s)",
-            len(statistics),
-        )
-        metadata = StatisticMetaData(
-            mean_type=StatisticMeanType.NONE,
-            has_sum=True,
-            name=self.name,
-            source="recorder",
-            statistic_id=self.entity_id,
-            unit_class=VolumeConverter.UNIT_CLASS,
-            unit_of_measurement=UnitOfVolume.CUBIC_METERS,
-        )
-        async_import_statistics(self.hass, metadata, statistics)
-        self._last_imported_at = meter_reading_at
+        """Import portal history into its dedicated external statistic."""
+        self._statistics.async_import(self.contract, name=self.name)
 
 
 class CanalHourlyConsumptionSensor(CanalContractSensor):

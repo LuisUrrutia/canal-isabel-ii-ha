@@ -15,7 +15,8 @@ Integración personalizada de Home Assistant para consultar automáticamente el 
 - Historial privado persistente y sincronizaciones incrementales con corrección de los dos últimos días.
 - Sincronización diaria a una hora configurable (03:00 de forma predeterminada).
 - Un dispositivo por contrato y tres sensores: contador, consumo horario y consumo diario.
-- Importación del histórico horario en las estadísticas de larga duración de Home Assistant.
+- Importación del histórico horario en una estadística externa independiente de
+  las estadísticas automáticas de Recorder.
 - Diagnósticos sin credenciales, contratos, contadores ni direcciones.
 - Traducciones en español e inglés.
 
@@ -79,7 +80,7 @@ Cada contrato crea un dispositivo con estos sensores:
 
 | Sensor | Unidad | Uso |
 | --- | --- | --- |
-| Lectura del contador | m³ | Total físico acumulado y fuente recomendada para el panel de Energía |
+| Lectura del contador | m³ | Última lectura física acumulada publicada por el portal |
 | Consumo horario | L | Consumo del intervalo horario más reciente |
 | Consumo diario | L | Consumo del último día disponible |
 
@@ -89,9 +90,20 @@ El sensor horario conserva el `unique_id` de versiones anteriores para evitar du
 
 1. Espera a que finalice la primera sincronización.
 2. Abre **Ajustes > Paneles > Energía**.
-3. En **Consumo de agua**, selecciona el sensor **Lectura del contador** del contrato.
+3. En **Consumo de agua**, selecciona la estadística externa cuyo nombre comienza
+   por **Canal de Isabel II ·**. Su identificador comienza por
+   `canal_de_isabel_ii:water_meter_`.
 
-La integración reconstruye el histórico acumulado anclándolo a la lectura física publicada por el portal e importa las correcciones sin duplicar puntos.
+No selecciones la estadística automática del sensor **Lectura del contador**: esa
+serie solo empieza cuando Home Assistant registra la entidad y no contiene el
+histórico del portal. La integración reconstruye el histórico acumulado,
+anclándolo a la lectura física, dentro de una estadística externa que ningún otro
+componente modifica.
+
+Al actualizar desde 3.1.1 o una versión anterior, elimina del panel la fuente de
+agua anterior y selecciona la nueva estadística externa. Si la fuente anterior
+llegó a mostrar un consumo negativo, elimina únicamente sus estadísticas desde
+**Herramientas para desarrolladores > Estadísticas** después de cambiar la fuente.
 
 ## Sincronización y almacenamiento
 
