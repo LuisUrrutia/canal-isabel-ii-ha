@@ -45,11 +45,59 @@
   "options": {
     "step": {
       "init": {
+        "title": "Configurar Canal de Isabel II",
+        "menu_options": {
+          "schedule": "Horario de sincronización",
+          "tariff": "Precio del agua"
+        }
+      },
+      "schedule": {
         "title": "Horario de sincronización",
         "description": "Elige la hora local para la sincronización incremental diaria.",
         "data": {
           "sync_hour": "Hora de sincronización (0–23)"
         }
+      },
+      "tariff": {
+        "title": "Elige un contrato de agua",
+        "description": "Los precios se configuran por separado para cada contrato descubierto en el portal.",
+        "data": {
+          "tariff_contract": "Contrato"
+        }
+      },
+      "tariff_profile": {
+        "title": "Configurar el precio del agua",
+        "description": "Introduce los datos de facturación que el portal de consumos no publica. Usa la fecha final de la última factura como inicio del periodo actual. Introduce 0 como tarifa municipal de alcantarillado cuando el servicio lo preste Canal.",
+        "data": {
+          "supply_type": "Tipo de suministro",
+          "sewer_provider": "Prestador del alcantarillado",
+          "meter_diameter_mm": "Diámetro del contador (mm)",
+          "supplied_uses": "Viviendas, locales o usos abastecidos (N)",
+          "billing_period_start": "Inicio del periodo de facturación actual",
+          "billing_cycle_days": "Duración nominal del ciclo (días)",
+          "municipal_sewer_rate_eur_m3": "Tarifa municipal de alcantarillado (EUR/m³)"
+        }
+      }
+    },
+    "error": {
+      "invalid_tariff_profile": "Revisa las fechas, los datos del contador y el alcantarillado. Un prestador municipal requiere una tarifa mayor que cero."
+    },
+    "abort": {
+      "no_contracts": "Todavía no hay un contrato de agua sincronizado. Espera a que termine correctamente la primera sincronización e inténtalo de nuevo."
+    }
+  },
+  "selector": {
+    "supply_type": {
+      "options": {
+        "single_dwelling": "Doméstico - una vivienda",
+        "multi_dwelling": "Doméstico - varias viviendas",
+        "domestic_equivalent": "Asimilado al uso doméstico"
+      }
+    },
+    "sewer_provider": {
+      "options": {
+        "canal": "Canal de Isabel II",
+        "municipality": "Ayuntamiento"
       }
     }
   },
@@ -63,6 +111,9 @@
       },
       "daily_consumption": {
         "name": "Consumo diario"
+      },
+      "estimated_bill": {
+        "name": "Factura de agua estimada"
       }
     }
   }

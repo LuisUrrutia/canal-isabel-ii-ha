@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from .tariffs import TARIFF_VERSION
+
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
 
@@ -53,6 +55,10 @@ async def async_get_config_entry_diagnostics(
                 if coordinator.last_exception is not None
                 else None
             ),
+        },
+        "tariffs": {
+            "catalog_version": TARIFF_VERSION,
+            "configured_contract_count": len(entry.runtime_data.tariff_profiles),
         },
         "snapshot": {
             "fetched_at": (

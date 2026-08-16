@@ -398,7 +398,7 @@ async def test_fetch_consumption_owns_login_contracts_and_history(
             "url": str(client.login_url),
             "enterprise": 1,
             "invisible": 1,
-            "userAgent": "Canal-Isabel-II-Home-Assistant/3.1.2",
+            "userAgent": "Canal-Isabel-II-Home-Assistant/3.2.0",
         }
     ]
     assert state.login_payload["_login_tipoUsuario"] == "PARTICULAR"

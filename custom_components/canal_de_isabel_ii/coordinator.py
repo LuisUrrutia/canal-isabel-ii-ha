@@ -22,7 +22,11 @@ from .const import DOMAIN
 from .models import ConsumptionSnapshot
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from homeassistant.core import HomeAssistant
+
+    from .tariffs import TariffProfile
 
 _LOGGER = logging.getLogger(__name__)
 _CONNECTION_RETRY_SECONDS = 30 * 60
@@ -152,6 +156,7 @@ class CanalRuntimeData:
 
     client: CanalClient
     coordinator: CanalCoordinator
+    tariff_profiles: Mapping[str, TariffProfile]
 
 
 type CanalConfigEntry = ConfigEntry[CanalRuntimeData]

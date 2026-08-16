@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, time
+from datetime import datetime, time, timedelta
+from decimal import Decimal
 from typing import TYPE_CHECKING, Any, override
 from zoneinfo import ZoneInfo
 
@@ -12,14 +13,22 @@ from homeassistant.components.sensor import (
     SensorEntity,
     SensorStateClass,
 )
-from homeassistant.const import UnitOfVolume
+from homeassistant.const import CURRENCY_EURO, UnitOfVolume
 from homeassistant.core import callback
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
 from .coordinator import CanalConfigEntry, CanalCoordinator
-from .statistics import CanalWaterStatisticsImporter
+from .statistics import CanalCostStatisticsImporter, CanalWaterStatisticsImporter
+from .tariffs import (
+    TARIFF_SOURCE_URL,
+    TARIFF_VERSION,
+    BillEstimate,
+    TariffProfile,
+    billing_period_for,
+    calculate_accrued_bill,
+)
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
@@ -29,6 +38,7 @@ if TYPE_CHECKING:
 
 PARALLEL_UPDATES = 0
 _PORTAL_TIME_ZONE = ZoneInfo("Europe/Madrid")
+_ONE_DAY = timedelta(days=1)
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -53,20 +63,26 @@ async def async_setup_entry(
         new_contracts = set(snapshot.contracts) - known_contracts
         if not new_contracts:
             return
+        entities: list[CanalContractSensor] = []
+        for contract_id in sorted(new_contracts):
+            entities.extend(
+                (
+                    CanalMeterReadingSensor(coordinator, contract_id),
+                    CanalHourlyConsumptionSensor(coordinator, contract_id),
+                    CanalDailyConsumptionSensor(coordinator, contract_id),
+                )
+            )
+            profile = entry.runtime_data.tariff_profiles.get(contract_id)
+            if profile is not None:
+                entities.append(
+                    CanalEstimatedBillSensor(coordinator, contract_id, profile)
+                )
         _LOGGER.info(
             "Adding %d newly discovered Canal contract(s) as %d sensor entities",
             len(new_contracts),
-            len(new_contracts) * 3,
+            len(entities),
         )
-        async_add_entities(
-            entity
-            for contract_id in sorted(new_contracts)
-            for entity in (
-                CanalMeterReadingSensor(coordinator, contract_id),
-                CanalHourlyConsumptionSensor(coordinator, contract_id),
-                CanalDailyConsumptionSensor(coordinator, contract_id),
-            )
-        )
+        async_add_entities(entities)
         known_contracts.update(new_contracts)
 
     async_add_new_contracts()
@@ -231,3 +247,131 @@ class CanalDailyConsumptionSensor(CanalContractSensor):
             "reading_day": reading.day.isoformat() if reading else None,
             "is_estimated": reading.is_estimated if reading else None,
         }
+
+
+class CanalEstimatedBillSensor(CanalContractSensor):
+    """Live invoice estimate using the configured tariff profile."""
+
+    _attr_device_class = SensorDeviceClass.MONETARY
+    _attr_native_unit_of_measurement = CURRENCY_EURO
+    _attr_state_class = SensorStateClass.TOTAL
+    _attr_translation_key = "estimated_bill"
+
+    def __init__(
+        self,
+        coordinator: CanalCoordinator,
+        contract_id: str,
+        profile: TariffProfile,
+    ) -> None:
+        """Initialize a monetary sensor for one configured contract."""
+        super().__init__(coordinator, contract_id)
+        self._profile = profile
+        self._attr_unique_id = f"canal_ii_estimated_bill_{contract_id}"
+        self._statistics = CanalCostStatisticsImporter(
+            coordinator.hass,
+            contract_id,
+            profile,
+        )
+
+    @override
+    async def async_added_to_hass(self) -> None:
+        """Import available daily costs after Home Assistant adds the entity."""
+        await super().async_added_to_hass()
+        self._import_historical_costs()
+
+    @override
+    def _handle_coordinator_update(self) -> None:
+        """Refresh the estimate and reimport corrected daily costs."""
+        self._import_historical_costs()
+        super()._handle_coordinator_update()
+
+    @property
+    @override
+    def available(self) -> bool:
+        """Require both portal history and a supported tariff period."""
+        return super().available and self._estimate() is not None
+
+    @property
+    @override
+    def native_value(self) -> Decimal | None:
+        """Return the estimated current invoice total in euros."""
+        estimate = self._estimate()
+        return estimate[0].total_eur if estimate is not None else None
+
+    @property
+    @override
+    def last_reset(self) -> datetime | None:
+        """Reset statistics at the configured nominal billing-cycle boundary."""
+        estimate = self._estimate()
+        if estimate is None:
+            return None
+        return datetime.combine(
+            estimate[0].period_start,
+            time.min,
+            tzinfo=_PORTAL_TIME_ZONE,
+        )
+
+    @property
+    @override
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Expose an auditable invoice-shaped breakdown without private IDs."""
+        estimate = self._estimate()
+        if estimate is None:
+            return {
+                "tariff_version": TARIFF_VERSION,
+                "tariff_source": TARIFF_SOURCE_URL,
+                "is_estimate": True,
+            }
+        bill, observed_days = estimate
+        elapsed_days = (bill.period_end - bill.period_start).days
+        return {
+            "billing_period_start": bill.period_start.isoformat(),
+            "calculated_through": bill.period_end.isoformat(),
+            "volume_m3": float(bill.volume_m3),
+            "variable_cost": float(bill.variable_eur),
+            "fixed_cost": float(bill.fixed_eur),
+            "taxable_base": float(bill.taxable_eur),
+            "vat": float(bill.vat_eur),
+            "non_taxable_cost": float(bill.non_taxable_eur),
+            "observed_days": observed_days,
+            "elapsed_days": elapsed_days,
+            "history_complete": observed_days == elapsed_days,
+            "tariff_version": TARIFF_VERSION,
+            "tariff_source": TARIFF_SOURCE_URL,
+            "is_estimate": True,
+        }
+
+    def _estimate(self) -> tuple[BillEstimate, int] | None:
+        """Calculate from daily portal readings in the current nominal cycle."""
+        latest = self.contract.latest_daily
+        if latest is None:
+            return None
+        period_start, period_limit = billing_period_for(self._profile, latest.day)
+        period_end = min(latest.day + _ONE_DAY, period_limit)
+        readings = tuple(
+            reading
+            for reading in self.contract.daily_readings
+            if period_start <= reading.day < period_end
+        )
+        volume_m3 = (
+            sum(
+                (Decimal(str(reading.volume_liters)) for reading in readings),
+                start=Decimal(0),
+            )
+            / 1000
+        )
+        try:
+            bill = calculate_accrued_bill(
+                volume_m3,
+                period_start,
+                period_limit,
+                period_end,
+                self._profile,
+            )
+        except ValueError:
+            return None
+        return bill, len({reading.day for reading in readings})
+
+    def _import_historical_costs(self) -> None:
+        """Import the portal history into its dedicated cost statistic."""
+        self._statistics.async_import(self.contract, name=self.name)

@@ -58,6 +58,10 @@ async def test_diagnostics_describe_health_without_personal_data(
 
     assert diagnostics["config_entry"] == {"version": 3, "minor_version": 0}
     assert diagnostics["coordinator"]["last_update_success"] is True
+    assert diagnostics["tariffs"] == {
+        "catalog_version": "2026",
+        "configured_contract_count": 0,
+    }
     assert diagnostics["snapshot"]["contract_count"] == 1
     assert diagnostics["snapshot"]["contracts"] == [
         {

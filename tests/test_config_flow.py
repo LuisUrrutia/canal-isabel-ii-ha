@@ -1,6 +1,8 @@
 """Tests for the public Home Assistant configuration flow."""
 
 from collections.abc import Iterator
+from datetime import date
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -10,12 +12,24 @@ from homeassistant.data_entry_flow import FlowResultType
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.canal_de_isabel_ii.const import (
+    CONF_BILLING_CYCLE_DAYS,
+    CONF_BILLING_PERIOD_START,
     CONF_CAPTCHA_API_KEY,
+    CONF_METER_DIAMETER_MM,
+    CONF_MUNICIPAL_SEWER_RATE,
     CONF_PASSWORD,
+    CONF_SEWER_PROVIDER,
+    CONF_SUPPLIED_USES,
+    CONF_SUPPLY_TYPE,
     CONF_SYNC_HOUR,
+    CONF_TARIFF_CONTRACT,
+    CONF_TARIFF_REVISION,
     CONF_USERNAME,
     DOMAIN,
 )
+from custom_components.canal_de_isabel_ii.tariffs import SewerProvider, SupplyType
+
+from .factories import make_snapshot
 
 VALID_INPUT = {
     CONF_USERNAME: "x1234567l",
@@ -202,8 +216,15 @@ async def test_options_flow_stores_daily_sync_hour(hass: HomeAssistant) -> None:
     entry.add_to_hass(hass)
 
     result = await hass.config_entries.options.async_init(entry.entry_id)
-    assert result["type"] is FlowResultType.FORM
+    assert result["type"] is FlowResultType.MENU
     assert result["step_id"] == "init"
+
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {"next_step_id": "schedule"},
+    )
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "schedule"
 
     result = await hass.config_entries.options.async_configure(
         result["flow_id"],
@@ -212,3 +233,129 @@ async def test_options_flow_stores_daily_sync_hour(hass: HomeAssistant) -> None:
 
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert result["data"] == {CONF_SYNC_HOUR: 5}
+
+
+async def test_options_flow_saves_tariff_profile_per_contract(
+    hass: HomeAssistant,
+) -> None:
+    """Users can provide only the billing facts absent from the portal."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data=VALID_INPUT,
+        options={CONF_SYNC_HOUR: 5},
+        version=3,
+    )
+    entry.add_to_hass(hass)
+    entry.runtime_data = SimpleNamespace(
+        coordinator=SimpleNamespace(data=make_snapshot())
+    )
+    profile_input = {
+        CONF_SUPPLY_TYPE: SupplyType.SINGLE_DWELLING,
+        CONF_SEWER_PROVIDER: SewerProvider.MUNICIPALITY,
+        CONF_METER_DIAMETER_MM: 15,
+        CONF_SUPPLIED_USES: 1,
+        CONF_BILLING_PERIOD_START: date(2026, 7, 8).isoformat(),
+        CONF_BILLING_CYCLE_DAYS: 60,
+        CONF_MUNICIPAL_SEWER_RATE: 0.22,
+    }
+
+    with (
+        patch(
+            "custom_components.canal_de_isabel_ii.config_flow."
+            "CanalTariffProfileStore.async_load",
+            return_value={},
+        ),
+        patch(
+            "custom_components.canal_de_isabel_ii.config_flow."
+            "CanalTariffProfileStore.async_save",
+            return_value=None,
+        ) as save,
+    ):
+        result = await hass.config_entries.options.async_init(entry.entry_id)
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"],
+            {"next_step_id": "tariff"},
+        )
+        assert result["type"] is FlowResultType.FORM
+        assert result["step_id"] == "tariff"
+
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"],
+            {CONF_TARIFF_CONTRACT: "contract-123"},
+        )
+        assert result["type"] is FlowResultType.FORM
+        assert result["step_id"] == "tariff_profile"
+
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"],
+            profile_input,
+        )
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["data"] == {
+        CONF_SYNC_HOUR: 5,
+        CONF_TARIFF_REVISION: 1,
+    }
+    saved_profiles = save.await_args.args[0]
+    assert set(saved_profiles) == {"contract-123"}
+    profile = saved_profiles["contract-123"]
+    assert profile.billing_period_start == date(2026, 7, 8)
+    assert profile.municipal_sewer_rate_eur_m3.as_tuple().exponent == -2
+
+
+async def test_options_flow_rejects_incomplete_municipal_tariff(
+    hass: HomeAssistant,
+) -> None:
+    """A zero municipal rate stays in the form instead of publishing zero cost."""
+    entry = MockConfigEntry(domain=DOMAIN, data=VALID_INPUT, version=3)
+    entry.add_to_hass(hass)
+    entry.runtime_data = SimpleNamespace(
+        coordinator=SimpleNamespace(data=make_snapshot())
+    )
+
+    with patch(
+        "custom_components.canal_de_isabel_ii.config_flow."
+        "CanalTariffProfileStore.async_load",
+        return_value={},
+    ):
+        result = await hass.config_entries.options.async_init(entry.entry_id)
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"],
+            {"next_step_id": "tariff"},
+        )
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"],
+            {CONF_TARIFF_CONTRACT: "contract-123"},
+        )
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"],
+            {
+                CONF_SUPPLY_TYPE: SupplyType.SINGLE_DWELLING,
+                CONF_SEWER_PROVIDER: SewerProvider.MUNICIPALITY,
+                CONF_METER_DIAMETER_MM: 15,
+                CONF_SUPPLIED_USES: 1,
+                CONF_BILLING_PERIOD_START: "2026-07-08",
+                CONF_BILLING_CYCLE_DAYS: 60,
+                CONF_MUNICIPAL_SEWER_RATE: 0,
+            },
+        )
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] == {"base": "invalid_tariff_profile"}
+
+
+async def test_options_flow_waits_for_contract_discovery(
+    hass: HomeAssistant,
+) -> None:
+    """Pricing configuration explains when no synchronized contract exists."""
+    entry = MockConfigEntry(domain=DOMAIN, data=VALID_INPUT, version=3)
+    entry.add_to_hass(hass)
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {"next_step_id": "tariff"},
+    )
+
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "no_contracts"

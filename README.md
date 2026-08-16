@@ -15,6 +15,8 @@ Integración personalizada de Home Assistant para consultar automáticamente el 
 - Historial privado persistente y sincronizaciones incrementales con corrección de los dos últimos días.
 - Sincronización diaria a una hora configurable (03:00 de forma predeterminada).
 - Un dispositivo por contrato y tres sensores: contador, consumo horario y consumo diario.
+- Cálculo opcional de la factura estimada con el tarifario oficial 2026, bloques
+  prorrateados, temporadas, cuotas fijas, alcantarillado e IVA.
 - Importación del histórico horario en una estadística externa independiente de
   las estadísticas automáticas de Recorder.
 - Diagnósticos sin credenciales, contratos, contadores ni direcciones.
@@ -56,6 +58,30 @@ Home Assistant guarda la integración inmediatamente. La validación del acceso,
 
 La primera sincronización descarga hasta seis meses. Como el portal solo permite consultar los consumos horarios día a día, esta operación puede tardar varios minutos. Durante ese tiempo la integración ya aparece en Home Assistant y las entidades se crean en cuanto se descubre el primer snapshot completo. Las sincronizaciones siguientes solo vuelven a consultar el tramo reciente.
 
+### Configuración de precios
+
+El portal de consumos no publica todos los datos necesarios para reconstruir una
+factura. Después de la primera sincronización, abre **Configurar > Precio del
+agua**, elige un contrato e introduce:
+
+- tipo de suministro doméstico;
+- prestador del alcantarillado: Canal o ayuntamiento;
+- diámetro del contador;
+- número de viviendas, locales o usos abastecidos (`N`);
+- fecha final de la última factura, que pasa a ser el inicio del periodo actual;
+- duración nominal del ciclo de facturación;
+- tarifa municipal de alcantarillado, si la cobra el ayuntamiento.
+
+Estos perfiles se guardan en almacenamiento privado, separado de las credenciales
+y del historial. La integración incluye las tarifas domésticas 2026 publicadas por
+Canal de Isabel II. Cuando cambie el tarifario será necesaria una actualización de
+la integración; no se interpreta el PDF durante la ejecución.
+
+El resultado es una estimación en curso: usa el consumo diario publicado hasta la
+última fecha disponible y un ciclo nominal configurado. La factura definitiva puede
+variar si Canal usa otras fechas de lectura, corrige consumos o aplica conceptos no
+incluidos en el tarifario.
+
 ## Prueba real desde CLI
 
 Antes de instalar la integración se puede comprobar el flujo completo contra el portal:
@@ -83,6 +109,7 @@ Cada contrato crea un dispositivo con estos sensores:
 | Lectura del contador | m³ | Última lectura física acumulada publicada por el portal |
 | Consumo horario | L | Consumo del intervalo horario más reciente |
 | Consumo diario | L | Consumo del último día disponible |
+| Factura de agua estimada | € | Coste acumulado del periodo; aparece al configurar los precios |
 
 El sensor horario conserva el `unique_id` de versiones anteriores para evitar duplicarlo durante una actualización.
 
@@ -104,6 +131,16 @@ Al actualizar desde 3.1.1 o una versión anterior, elimina del panel la fuente d
 agua anterior y selecciona la nueva estadística externa. Si la fuente anterior
 llegó a mostrar un consumo negativo, elimina únicamente sus estadísticas desde
 **Herramientas para desarrolladores > Estadísticas** después de cambiar la fuente.
+
+Si se configuraron precios, edita la misma fuente de agua y selecciona la
+estadística externa cuyo nombre termina en **cost estimate** como estadística de
+coste. Su identificador comienza por `canal_de_isabel_ii:water_cost_`. Esta serie
+reconstruye también el coste histórico y permanece creciente entre ciclos de
+facturación. El sensor **Factura de agua estimada** queda disponible para consultar
+el total y el desglose del periodo actual.
+
+No uses un precio fijo por metro cúbico: los bloques progresivos, las temporadas y
+las cuotas de servicio hacen que ese cálculo no coincida con la factura.
 
 ## Sincronización y almacenamiento
 
@@ -145,6 +182,11 @@ La versión 3 sustituye la cookie manual por el inicio de sesión automático. L
 - La disponibilidad, el retraso y la precisión de las telelecturas dependen de Canal de Isabel II.
 - El inicio de sesión automático depende de un servicio externo de resolución de CAPTCHA.
 - Sin Recorder, los tres sensores funcionan, pero no se importa el histórico acumulado.
+- El cálculo de precios incluido actualmente cubre usos domésticos y asimilados al
+  doméstico durante 2026. Los usos comerciales, industriales y otros usos todavía
+  no se calculan.
+- La factura estimada usa ciclos nominales; no sustituye a la factura emitida por
+  Canal ni incluye bonificaciones o conceptos extraordinarios.
 
 ## Solución de problemas
 

@@ -45,11 +45,59 @@
   "options": {
     "step": {
       "init": {
+        "title": "Configure Canal de Isabel II",
+        "menu_options": {
+          "schedule": "Synchronization schedule",
+          "tariff": "Water pricing"
+        }
+      },
+      "schedule": {
         "title": "Synchronization schedule",
         "description": "Choose the local hour for the daily incremental synchronization.",
         "data": {
           "sync_hour": "Synchronization hour (0–23)"
         }
+      },
+      "tariff": {
+        "title": "Choose a water contract",
+        "description": "Pricing is configured separately for each contract discovered by the portal.",
+        "data": {
+          "tariff_contract": "Contract"
+        }
+      },
+      "tariff_profile": {
+        "title": "Configure water pricing",
+        "description": "Enter the billing facts that are not published by the consumption portal. Use the end date of the latest bill as the current billing-period start. Enter 0 for the municipal sewer rate when Canal provides sewer service.",
+        "data": {
+          "supply_type": "Supply type",
+          "sewer_provider": "Sewer service provider",
+          "meter_diameter_mm": "Meter diameter (mm)",
+          "supplied_uses": "Homes, premises or supplied uses (N)",
+          "billing_period_start": "Current billing-period start",
+          "billing_cycle_days": "Nominal billing-cycle length (days)",
+          "municipal_sewer_rate_eur_m3": "Municipal sewer rate (EUR/m³)"
+        }
+      }
+    },
+    "error": {
+      "invalid_tariff_profile": "Check the billing dates, meter data and sewer-service settings. A municipal provider requires a rate greater than zero."
+    },
+    "abort": {
+      "no_contracts": "No synchronized water contract is available yet. Wait for the first successful portal synchronization and try again."
+    }
+  },
+  "selector": {
+    "supply_type": {
+      "options": {
+        "single_dwelling": "Domestic - single dwelling",
+        "multi_dwelling": "Domestic - multiple dwellings",
+        "domestic_equivalent": "Equivalent to domestic use"
+      }
+    },
+    "sewer_provider": {
+      "options": {
+        "canal": "Canal de Isabel II",
+        "municipality": "Municipality"
       }
     }
   },
@@ -63,6 +111,9 @@
       },
       "daily_consumption": {
         "name": "Daily consumption"
+      },
+      "estimated_bill": {
+        "name": "Estimated water bill"
       }
     }
   }

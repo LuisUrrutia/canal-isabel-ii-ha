@@ -1,7 +1,9 @@
 """Tests through the Home Assistant config-entry seam."""
 
 import asyncio
-from datetime import timedelta
+from dataclasses import replace
+from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
 from itertools import pairwise
 from unittest.mock import AsyncMock, patch
 
@@ -34,6 +36,12 @@ from custom_components.canal_de_isabel_ii.const import (
     CONF_USERNAME,
     DOMAIN,
 )
+from custom_components.canal_de_isabel_ii.models import DailyConsumption
+from custom_components.canal_de_isabel_ii.tariffs import (
+    SewerProvider,
+    SupplyType,
+    TariffProfile,
+)
 
 from .factories import make_snapshot
 
@@ -43,6 +51,7 @@ VALID_DATA = {
     CONF_CAPTCHA_API_KEY: "captcha-key",
 }
 EXTERNAL_WATER_STATISTIC_ID = f"{DOMAIN}:water_meter_contract_123"
+EXTERNAL_COST_STATISTIC_ID = f"{DOMAIN}:water_cost_contract_123"
 
 
 @pytest.fixture
@@ -113,6 +122,63 @@ async def test_setup_creates_three_water_sensors(hass: HomeAssistant) -> None:
     assert hourly.attributes["reading_start"] == "2026-08-14T09:00:00+00:00"
     assert daily.state == "15.5"
     assert daily.attributes["reading_day"] == "2026-08-14"
+
+
+async def test_configured_tariff_creates_estimated_bill_sensor(
+    hass: HomeAssistant,
+) -> None:
+    """A private contract profile exposes an auditable monetary total."""
+    entry = _entry()
+    entry.add_to_hass(hass)
+    profile = TariffProfile(
+        supply_type=SupplyType.SINGLE_DWELLING,
+        sewer_provider=SewerProvider.MUNICIPALITY,
+        meter_diameter_mm=15,
+        supplied_uses=1,
+        billing_period_start=date(2026, 7, 8),
+        billing_cycle_days=60,
+        municipal_sewer_rate_eur_m3=Decimal("0.2200"),
+    )
+    with (
+        patch(
+            "custom_components.canal_de_isabel_ii.client."
+            "CanalClient.async_fetch_consumption",
+            return_value=make_snapshot(),
+        ),
+        patch(
+            "custom_components.canal_de_isabel_ii.storage.CanalHistoryStore.async_load",
+            return_value=None,
+        ),
+        patch(
+            "custom_components.canal_de_isabel_ii.storage.CanalHistoryStore.async_save",
+            return_value=None,
+        ),
+        patch(
+            "custom_components.canal_de_isabel_ii.CanalTariffProfileStore.async_load",
+            return_value={"contract-123": profile},
+        ),
+    ):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    registry = er.async_get(hass)
+    cost_id = registry.async_get_entity_id(
+        "sensor",
+        DOMAIN,
+        "canal_ii_estimated_bill_contract-123",
+    )
+    assert cost_id is not None
+    cost = hass.states.get(cost_id)
+    assert cost is not None
+    assert cost.attributes["device_class"] == "monetary"
+    assert cost.attributes["state_class"] == "total"
+    assert cost.attributes["unit_of_measurement"] == "€"
+    assert cost.attributes["billing_period_start"] == "2026-07-08"
+    assert cost.attributes["calculated_through"] == "2026-08-15"
+    assert cost.attributes["volume_m3"] == pytest.approx(0.0245)
+    assert cost.attributes["observed_days"] == 2
+    assert not cost.attributes["history_complete"]
+    assert cost.attributes["is_estimate"]
 
 
 async def test_setup_finishes_while_initial_sync_runs_in_background(
@@ -216,6 +282,77 @@ async def test_setup_backfills_dedicated_external_water_statistics(
     assert all(
         current["sum"] <= following["sum"] for current, following in pairwise(rows)
     )
+
+
+async def test_configured_tariff_backfills_external_cost_statistics(
+    hass: HomeAssistant,
+    recorder_mock: Recorder,
+) -> None:
+    """Daily tariff cost is historical, monetary and monotonic across Recorder."""
+    entry = _entry()
+    entry.add_to_hass(hass)
+    profile = TariffProfile(
+        supply_type=SupplyType.SINGLE_DWELLING,
+        sewer_provider=SewerProvider.MUNICIPALITY,
+        meter_diameter_mm=15,
+        supplied_uses=1,
+        billing_period_start=date(2026, 7, 8),
+        billing_cycle_days=60,
+        municipal_sewer_rate_eur_m3=Decimal("0.2200"),
+    )
+    original_snapshot = make_snapshot()
+    original_contract = original_snapshot.contracts["contract-123"]
+    snapshot = replace(
+        original_snapshot,
+        contracts={
+            "contract-123": replace(
+                original_contract,
+                daily_readings=(
+                    DailyConsumption(day=date(2026, 7, 7), volume_liters=1500),
+                    DailyConsumption(day=date(2026, 7, 8), volume_liters=1000),
+                ),
+            )
+        },
+    )
+
+    with (
+        patch(
+            "custom_components.canal_de_isabel_ii.client."
+            "CanalClient.async_fetch_consumption",
+            return_value=snapshot,
+        ),
+        patch(
+            "custom_components.canal_de_isabel_ii.storage.CanalHistoryStore.async_load",
+            return_value=None,
+        ),
+        patch(
+            "custom_components.canal_de_isabel_ii.storage.CanalHistoryStore.async_save",
+            return_value=None,
+        ),
+        patch(
+            "custom_components.canal_de_isabel_ii.CanalTariffProfileStore.async_load",
+            return_value={"contract-123": profile},
+        ),
+    ):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    await async_wait_recording_done(hass)
+    statistics = await get_instance(hass).async_add_executor_job(
+        statistics_during_period,
+        hass,
+        datetime(2026, 7, 7, tzinfo=UTC),
+        None,
+        {EXTERNAL_COST_STATISTIC_ID},
+        "hour",
+        None,
+        {"state", "sum"},
+    )
+
+    rows = statistics[EXTERNAL_COST_STATISTIC_ID]
+    assert len(rows) == 2
+    assert rows[-1]["state"] < rows[0]["state"]
+    assert rows[-1]["sum"] > rows[0]["sum"] > 0
 
 
 async def test_cached_snapshot_is_used_for_incremental_refresh(
@@ -409,10 +546,17 @@ async def test_entry_updates_use_the_registered_reload_listener(
 async def test_removing_entry_deletes_private_history(hass: HomeAssistant) -> None:
     """Account deletion also removes the integration's private cache."""
     entry = _entry()
-    with patch(
-        "custom_components.canal_de_isabel_ii.CanalHistoryStore.async_remove",
-        return_value=None,
-    ) as remove:
+    with (
+        patch(
+            "custom_components.canal_de_isabel_ii.CanalHistoryStore.async_remove",
+            return_value=None,
+        ) as remove_history,
+        patch(
+            "custom_components.canal_de_isabel_ii.CanalTariffProfileStore.async_remove",
+            return_value=None,
+        ) as remove_tariffs,
+    ):
         await async_remove_entry(hass, entry)
 
-    remove.assert_awaited_once_with()
+    remove_history.assert_awaited_once_with()
+    remove_tariffs.assert_awaited_once_with()

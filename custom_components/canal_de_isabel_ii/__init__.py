@@ -24,6 +24,7 @@ from .const import (
 )
 from .coordinator import CanalConfigEntry, CanalCoordinator, CanalRuntimeData
 from .storage import CanalHistoryStore
+from .tariff_storage import CanalTariffProfileStore
 
 if TYPE_CHECKING:
     from datetime import datetime
@@ -91,9 +92,15 @@ async def async_setup_entry(
     )
     client = CanalClient(session, credentials)
     store = CanalHistoryStore(hass, entry.entry_id)
+    tariff_store = CanalTariffProfileStore(hass, entry.entry_id)
+    tariff_profiles = await tariff_store.async_load()
     coordinator = CanalCoordinator(hass, entry, client, store)
     await coordinator.async_initialize()
-    entry.runtime_data = CanalRuntimeData(client=client, coordinator=coordinator)
+    entry.runtime_data = CanalRuntimeData(
+        client=client,
+        coordinator=coordinator,
+        tariff_profiles=tariff_profiles,
+    )
 
     async def async_scheduled_refresh(_: datetime) -> None:
         await coordinator.async_request_refresh()
@@ -154,5 +161,9 @@ async def async_remove_entry(
     entry: CanalConfigEntry,
 ) -> None:
     """Delete private consumption history with its account entry."""
-    _LOGGER.info("Removing private history for Canal config entry %s", entry.entry_id)
+    _LOGGER.info(
+        "Removing private history and tariff profiles for Canal config entry %s",
+        entry.entry_id,
+    )
     await CanalHistoryStore(hass, entry.entry_id).async_remove()
+    await CanalTariffProfileStore(hass, entry.entry_id).async_remove()
