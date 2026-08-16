@@ -14,6 +14,7 @@ from pytest_aiohttp.plugin import AiohttpClient
 from custom_components.canal_de_isabel_ii import client as client_module
 from custom_components.canal_de_isabel_ii.client import (
     CanalAuthenticationError,
+    CanalCaptchaCredentialsError,
     CanalCaptchaError,
     CanalClient,
     CanalConnectionError,
@@ -78,6 +79,55 @@ class FailingCaptchaSolver:
         del sitekey, url, enterprise, invisible, userAgent
         msg = "ERROR_ZERO_BALANCE"
         raise RuntimeError(msg)
+
+
+class UnsolvableCaptchaSolver:
+    """Adapter that represents a transient challenge-specific solver failure."""
+
+    def __init__(self) -> None:
+        """Initialize the attempt counter."""
+        self.calls = 0
+
+    async def recaptcha(
+        self,
+        *,
+        sitekey: str,
+        url: str,
+        enterprise: int,
+        invisible: int,
+        userAgent: str,  # noqa: N803 - 2Captcha's public argument name
+    ) -> dict[str, object]:
+        """Fail with the provider's safe transient error code."""
+        del sitekey, url, enterprise, invisible, userAgent
+        self.calls += 1
+        msg = "ERROR_CAPTCHA_UNSOLVABLE"
+        raise RuntimeError(msg)
+
+
+class EventuallySolvableCaptchaSolver(FakeCaptchaSolver):
+    """Adapter that succeeds when a transient challenge is submitted again."""
+
+    async def recaptcha(
+        self,
+        *,
+        sitekey: str,
+        url: str,
+        enterprise: int,
+        invisible: int,
+        userAgent: str,  # noqa: N803 - 2Captcha's public argument name
+    ) -> dict[str, object]:
+        """Fail the first task and solve the replacement task."""
+        if not self.calls:
+            self.calls.append({"failed": True})
+            msg = "ERROR_CAPTCHA_UNSOLVABLE"
+            raise RuntimeError(msg)
+        return await super().recaptcha(
+            sitekey=sitekey,
+            url=url,
+            enterprise=enterprise,
+            invisible=invisible,
+            userAgent=userAgent,
+        )
 
 
 class EmptyCaptchaSolver:
@@ -238,6 +288,7 @@ async def make_client(  # noqa: C901, PLR0913 - explicit portal adapter controls
     history_days: int = 2,
     correction_days: int = 2,
     hourly_history_days: int | None = None,
+    captcha_attempts: int = 5,
 ) -> tuple[
     CanalClient,
     FakeCaptchaSolver | FailingCaptchaSolver | EmptyCaptchaSolver,
@@ -344,6 +395,7 @@ async def make_client(  # noqa: C901, PLR0913 - explicit portal adapter controls
         history_days=history_days,
         correction_days=correction_days,
         hourly_history_days=hourly_history_days,
+        captcha_attempts=captcha_attempts,
     )
     return client, solver
 
@@ -398,7 +450,11 @@ async def test_fetch_consumption_owns_login_contracts_and_history(
             "url": str(client.login_url),
             "enterprise": 1,
             "invisible": 1,
-            "userAgent": "Canal-Isabel-II-Home-Assistant/3.2.0",
+            "userAgent": (
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/151.0.0.0 Safari/537.36"
+            ),
         }
     ]
     assert state.login_payload["_login_tipoUsuario"] == "PARTICULAR"
@@ -449,7 +505,7 @@ async def test_debug_logs_report_progress_without_secrets(
         if record.name == "custom_components.canal_de_isabel_ii.client"
     )
     assert "Starting initial portal scrape" in messages
-    assert "Requesting an invisible enterprise reCAPTCHA solution" in messages
+    assert "Requesting invisible enterprise reCAPTCHA solution 1 of 5" in messages
     assert "Synchronizing Canal contract 1 of 1" in messages
     assert "Querying hourly consumption for day 1 of 1" in messages
     assert "Completed initial portal scrape" in messages
@@ -505,8 +561,12 @@ async def test_fetch_consumption_refreshes_only_recent_history(
         address="Old address",
         meter_reading_m3=1200.0,
         meter_reading_at=datetime(2026, 8, 13, 3, tzinfo=UTC),
-        daily_readings=(DailyConsumption(date(2026, 8, 12), 1.0),),
+        daily_readings=(
+            DailyConsumption(date(2025, 12, 1), 7.0),
+            DailyConsumption(date(2026, 8, 12), 1.0),
+        ),
         hourly_readings=(
+            ConsumptionReading(datetime(2025, 12, 1, tzinfo=UTC), 7.0),
             ConsumptionReading(datetime(2026, 8, 12, tzinfo=UTC), 99.0),
             ConsumptionReading(datetime(2026, 8, 13, tzinfo=UTC), 99.0),
         ),
@@ -525,8 +585,84 @@ async def test_fetch_consumption_refreshes_only_recent_history(
     }
     assert hourly_days == {"2026-08-12", "2026-08-13", "2026-08-14"}
     readings = snapshot.contracts["contract-a"].hourly_readings
-    assert readings[0].volume_liters == 0.5
+    assert readings[0] == ConsumptionReading(datetime(2025, 12, 1, tzinfo=UTC), 7.0)
     assert readings[-1].start == datetime(2026, 8, 14, 21, tzinfo=UTC)
+    assert snapshot.contracts["contract-a"].daily_readings[0] == DailyConsumption(
+        date(2025, 12, 1), 7.0
+    )
+
+
+@pytest.mark.asyncio
+async def test_full_resync_refreshes_all_retained_history(
+    aiohttp_client: AiohttpClient,
+    socket_enabled: None,
+) -> None:
+    """A manual full resync starts at the oldest retained reading."""
+    state = PortalState(contracts={"contract-a": CONTRACTS["contract-a"]})
+    client, _ = await make_client(
+        aiohttp_client,
+        state,
+        history_days=30,
+        hourly_history_days=1,
+    )
+    previous_contract = ContractConsumption(
+        contract_id="contract-a",
+        meter_id="old-meter",
+        address="Old address",
+        meter_reading_m3=1200.0,
+        meter_reading_at=datetime(2026, 8, 13, 3, tzinfo=UTC),
+        daily_readings=(DailyConsumption(date(2026, 6, 1), 7.0),),
+        hourly_readings=(ConsumptionReading(datetime(2026, 8, 13, tzinfo=UTC), 7.0),),
+    )
+    previous = ConsumptionSnapshot(
+        contracts={"contract-a": previous_contract},
+        fetched_at=datetime(2026, 8, 13, 6, tzinfo=UTC),
+    )
+
+    snapshot = await client.async_fetch_consumption(previous, full_resync=True)
+
+    daily_queries = [
+        query for query in state.queries if query["periodicidad"] == "Diaria"
+    ]
+    assert daily_queries[0]["fechaDesde"] == "2026-06-01"
+    assert snapshot.contracts["contract-a"].daily_readings[0] == DailyConsumption(
+        date(2026, 6, 1), 10.0
+    )
+
+
+@pytest.mark.asyncio
+async def test_full_resync_keeps_the_normal_window_for_a_short_cache(
+    aiohttp_client: AiohttpClient,
+    socket_enabled: None,
+) -> None:
+    """A short cache does not reduce the normal full-resync history window."""
+    state = PortalState(contracts={"contract-a": CONTRACTS["contract-a"]})
+    client, _ = await make_client(
+        aiohttp_client,
+        state,
+        history_days=30,
+        hourly_history_days=1,
+    )
+    previous_contract = ContractConsumption(
+        contract_id="contract-a",
+        meter_id="old-meter",
+        address="Old address",
+        meter_reading_m3=1200.0,
+        meter_reading_at=datetime(2026, 8, 13, 3, tzinfo=UTC),
+        daily_readings=(DailyConsumption(date(2026, 8, 12), 7.0),),
+        hourly_readings=(ConsumptionReading(datetime(2026, 8, 13, tzinfo=UTC), 7.0),),
+    )
+    previous = ConsumptionSnapshot(
+        contracts={"contract-a": previous_contract},
+        fetched_at=datetime(2026, 8, 13, 6, tzinfo=UTC),
+    )
+
+    await client.async_fetch_consumption(previous, full_resync=True)
+
+    daily_queries = [
+        query for query in state.queries if query["periodicidad"] == "Diaria"
+    ]
+    assert daily_queries[0]["fechaDesde"] == "2026-07-16"
 
 
 @pytest.mark.asyncio
@@ -584,8 +720,55 @@ async def test_invalid_credentials_are_distinct_from_captcha_failure(
         PortalState(),
         captcha_solver=FailingCaptchaSolver(),
     )
-    with pytest.raises(CanalCaptchaError, match="2Captcha"):
+    with pytest.raises(CanalCaptchaCredentialsError, match="2Captcha"):
         await captcha_client.async_validate_credentials()
+
+    transient_client, _ = await make_client(
+        aiohttp_client,
+        PortalState(),
+        captcha_solver=UnsolvableCaptchaSolver(),
+    )
+    with pytest.raises(CanalCaptchaError, match="2Captcha") as exc_info:
+        await transient_client.async_validate_credentials()
+    assert not isinstance(exc_info.value, CanalCaptchaCredentialsError)
+
+
+@pytest.mark.asyncio
+async def test_unsolvable_captcha_is_submitted_once_more(
+    aiohttp_client: AiohttpClient,
+    socket_enabled: None,
+) -> None:
+    """A refunded unsolvable task is retried up to the configured limit."""
+    solver = EventuallySolvableCaptchaSolver()
+    client, _ = await make_client(
+        aiohttp_client,
+        PortalState(),
+        captcha_solver=solver,
+    )
+
+    await client.async_validate_credentials()
+
+    assert len(solver.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_captcha_attempt_limit_is_configurable(
+    aiohttp_client: AiohttpClient,
+    socket_enabled: None,
+) -> None:
+    """The portal client honors a retry limit supplied by Home Assistant."""
+    solver = UnsolvableCaptchaSolver()
+    client, _ = await make_client(
+        aiohttp_client,
+        PortalState(),
+        captcha_solver=solver,
+        captcha_attempts=3,
+    )
+
+    with pytest.raises(CanalCaptchaError):
+        await client.async_validate_credentials()
+
+    assert solver.calls == 3
 
 
 @pytest.mark.asyncio
@@ -737,6 +920,30 @@ async def test_changed_graph_labels_fail_explicitly(
 
     with pytest.raises(CanalInvalidResponseError, match=message):
         await client.async_fetch_consumption()
+
+
+@pytest.mark.asyncio
+async def test_unrelated_chart_rows_do_not_pollute_consumption(
+    aiohttp_client: AiohttpClient,
+    socket_enabled: None,
+) -> None:
+    """Only dataJsonConsumo contributes rows to the hourly consumption parser."""
+    state = PortalState(
+        contracts={"contract-a": CONTRACTS["contract-a"]},
+        hourly_chart_override=(
+            "<script>dataJsonConsumo = {rows: ["
+            "{c:[{v: 'X 14/08/2026 00h '}, {v: 12.5}]}]};</script>"
+            "<script>auxiliaryChart = {rows: ["
+            "{c:[{v: 'S  '}, {v: 99}]}]};</script>"
+        ),
+    )
+    client, _ = await make_client(aiohttp_client, state, history_days=1)
+
+    snapshot = await client.async_fetch_consumption()
+
+    assert snapshot.contracts["contract-a"].hourly_readings == (
+        ConsumptionReading(datetime(2026, 8, 13, 22, tzinfo=UTC), 12.5),
+    )
 
 
 @pytest.mark.asyncio

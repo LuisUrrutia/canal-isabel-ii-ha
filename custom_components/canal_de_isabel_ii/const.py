@@ -8,6 +8,7 @@ CONFIG_ENTRY_MINOR_VERSION = 0
 CONF_USERNAME = "username"
 CONF_PASSWORD = "password"  # noqa: S105 - Home Assistant config field name
 CONF_CAPTCHA_API_KEY = "captcha_api_key"
+CONF_CAPTCHA_ATTEMPTS = "captcha_attempts"
 CONF_SYNC_HOUR = "sync_hour"
 CONF_TARIFF_CONTRACT = "tariff_contract"
 CONF_SUPPLY_TYPE = "supply_type"
@@ -20,6 +21,8 @@ CONF_MUNICIPAL_SEWER_RATE = "municipal_sewer_rate_eur_m3"
 CONF_TARIFF_REVISION = "tariff_revision"
 
 DEFAULT_SYNC_HOUR = 3
+DEFAULT_CAPTCHA_ATTEMPTS = 5
+MAX_CAPTCHA_ATTEMPTS = 10
 
 DEFAULT_NAME = "Canal de Isabel II"
 

@@ -18,7 +18,12 @@ from zoneinfo import ZoneInfo
 from aiohttp import ClientError, ClientSession, ClientTimeout, FormData
 from twocaptcha import TwoCaptcha
 
-from .const import BASE_URL, CONSUMPTION_URL
+from .const import (
+    BASE_URL,
+    CONSUMPTION_URL,
+    DEFAULT_CAPTCHA_ATTEMPTS,
+    MAX_CAPTCHA_ATTEMPTS,
+)
 from .models import (
     ConsumptionReading,
     ConsumptionSnapshot,
@@ -31,7 +36,11 @@ if TYPE_CHECKING:
 
 _PORTAL_TIME_ZONE = ZoneInfo("Europe/Madrid")
 _REQUEST_TIMEOUT = ClientTimeout(total=45)
-_USER_AGENT = "Canal-Isabel-II-Home-Assistant/3.2.0"
+_BROWSER_USER_AGENT = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/151.0.0.0 Safari/537.36"
+)
 _LOGIN_PATH = "/web/ovir"
 _DEFAULT_HISTORY_DAYS = 183
 _DEFAULT_CORRECTION_DAYS = 2
@@ -51,6 +60,10 @@ _GRAPH_ROW_RE = re.compile(
     r"\{v:\s*(?P<value>-?\d+(?:\.\d+)?)\}",
     re.DOTALL,
 )
+_CONSUMPTION_GRAPH_RE = re.compile(
+    r"\bdataJsonConsumo\s*=\s*(?P<graph>\{.*?\})\s*;",
+    re.DOTALL,
+)
 _DATE_RE = re.compile(r"(?P<date>\d{2}/\d{2}/\d{4})")
 _HOUR_RE = re.compile(r"(?P<hour>\d{2})h")
 _METADATA_RE = re.compile(
@@ -60,6 +73,19 @@ _METADATA_RE = re.compile(
     r"FECHA\s+Y\s+HORA\s+LECTURA\s+"
     r"(?P<read_at>\d{2}/\d{2}/\d{4}\s+\d{2}:\d{2})",
     re.IGNORECASE | re.DOTALL,
+)
+_CAPTCHA_ERROR_CODE_RE = re.compile(r"\b(ERROR_[A-Z0-9_]+)\b")
+_CAPTCHA_RETRYABLE_CODES = frozenset(
+    {"ERROR_CAPTCHA_UNSOLVABLE", "ERROR_NO_SLOT_AVAILABLE"}
+)
+_CAPTCHA_ACCOUNT_ERROR_CODES = frozenset(
+    {
+        "ERROR_ACCOUNT_SUSPENDED",
+        "ERROR_IP_NOT_ALLOWED",
+        "ERROR_KEY_DOES_NOT_EXIST",
+        "ERROR_WRONG_USER_KEY",
+        "ERROR_ZERO_BALANCE",
+    }
 )
 
 
@@ -73,6 +99,10 @@ class CanalAuthenticationError(CanalError):
 
 class CanalCaptchaError(CanalError):
     """2Captcha could not produce a usable portal token."""
+
+
+class CanalCaptchaCredentialsError(CanalCaptchaError):
+    """The configured 2Captcha account cannot accept solve requests."""
 
 
 class CanalConnectionError(CanalError):
@@ -338,14 +368,16 @@ class CanalClient:
         history_days: int = _DEFAULT_HISTORY_DAYS,
         correction_days: int = _DEFAULT_CORRECTION_DAYS,
         hourly_history_days: int | None = None,
+        captcha_attempts: int = DEFAULT_CAPTCHA_ATTEMPTS,
     ) -> None:
         """Initialize the portal client with injected remote adapters."""
         if (
             history_days < 1
             or correction_days < 1
             or (hourly_history_days is not None and hourly_history_days < 1)
+            or not 1 <= captcha_attempts <= MAX_CAPTCHA_ATTEMPTS
         ):
-            msg = "History and correction windows must be positive"
+            msg = "History windows and CAPTCHA attempts are outside their limits"
             raise ValueError(msg)
         self._session = session
         self._credentials = credentials
@@ -361,6 +393,7 @@ class CanalClient:
         self._history_days = history_days
         self._correction_days = correction_days
         self._hourly_history_days = hourly_history_days
+        self._captcha_attempts = captcha_attempts
 
     @property
     def login_url(self) -> str:
@@ -380,10 +413,18 @@ class CanalClient:
     async def async_fetch_consumption(
         self,
         previous: ConsumptionSnapshot | None = None,
+        *,
+        full_resync: bool = False,
     ) -> ConsumptionSnapshot:
         """Return a normalized, merged history for every account contract."""
         started = monotonic()
-        sync_type = "incremental" if previous is not None else "initial"
+        sync_type = (
+            "full resynchronization"
+            if full_resync
+            else "incremental"
+            if previous is not None
+            else "initial"
+        )
         _LOGGER.info(
             "Starting %s portal scrape with a %d-day history window and a "
             "%d-day correction window",
@@ -393,7 +434,10 @@ class CanalClient:
         )
         for attempt in range(2):
             try:
-                snapshot = await self._async_fetch_consumption_once(previous)
+                snapshot = await self._async_fetch_consumption_once(
+                    previous,
+                    full_resync=full_resync,
+                )
             except _CanalSessionExpiredError:
                 if attempt == 1:
                     _LOGGER.exception(
@@ -426,6 +470,8 @@ class CanalClient:
     async def _async_fetch_consumption_once(
         self,
         previous: ConsumptionSnapshot | None,
+        *,
+        full_resync: bool,
     ) -> ConsumptionSnapshot:
         """Fetch one complete snapshot using the current portal session."""
         initial_page = await self._authenticated_consumption_page()
@@ -461,6 +507,7 @@ class CanalClient:
                     page,
                     reference.contract_id,
                     prior,
+                    full_resync=full_resync,
                 )
                 contract = contracts[reference.contract_id]
                 _LOGGER.info(
@@ -489,12 +536,18 @@ class CanalClient:
         page: str,
         contract_id: str,
         previous: ContractConsumption | None,
+        *,
+        full_resync: bool,
     ) -> ContractConsumption:
         parser = self._parse_page(page)
         form = self._consumption_form(parser)
         max_day = self._maximum_available_day(form)
         history_start = max_day - timedelta(days=self._history_days - 1)
-        refresh_start = self._refresh_start(previous, history_start)
+        refresh_start = (
+            self._full_resync_start(previous, history_start)
+            if full_resync
+            else self._refresh_start(previous, history_start)
+        )
 
         daily: list[DailyConsumption] = []
         month_ranges = tuple(_month_ranges(refresh_start, max_day))
@@ -555,14 +608,10 @@ class CanalClient:
         merged_daily = _merge_daily(
             previous.daily_readings if previous is not None else (),
             daily,
-            replace_from=refresh_start,
-            keep_from=history_start,
         )
         merged_hourly = _merge_hourly(
             previous.hourly_readings if previous is not None else (),
             hourly,
-            replace_from=refresh_start,
-            keep_from=history_start,
         )
         metadata = self._contract_metadata(parser)
         return ContractConsumption(
@@ -589,6 +638,21 @@ class CanalClient:
             history_start,
             latest_local_day - timedelta(days=self._correction_days - 1),
         )
+
+    @staticmethod
+    def _full_resync_start(
+        previous: ContractConsumption | None,
+        history_start: date,
+    ) -> date:
+        """Start at the oldest retained day without shortening normal history."""
+        if previous is None:
+            return history_start
+        retained_days = [reading.day for reading in previous.daily_readings]
+        retained_days.extend(
+            reading.start.astimezone(_PORTAL_TIME_ZONE).date()
+            for reading in previous.hourly_readings
+        )
+        return min((history_start, *retained_days))
 
     async def _authenticated_consumption_page(self) -> str:
         result = await self._request_text("GET", self._consumption_url)
@@ -622,36 +686,7 @@ class CanalClient:
             msg = "The portal login page has no reCAPTCHA site key"
             raise CanalInvalidResponseError(msg)
 
-        captcha_started = monotonic()
-        _LOGGER.info("Requesting an invisible enterprise reCAPTCHA solution")
-        try:
-            solved = await self._captcha_solver.recaptcha(
-                sitekey=match.group("sitekey"),
-                url=self._login_url,
-                enterprise=1,
-                invisible=1,
-                userAgent=_USER_AGENT,
-            )
-            token = str(solved["code"]).strip()
-        except Exception as err:  # noqa: BLE001 - third-party solver exceptions vary
-            _LOGGER.error(  # noqa: TRY400 - solver tracebacks may contain secrets
-                "The reCAPTCHA solver failed after %.1f seconds (%s)",
-                monotonic() - captcha_started,
-                type(err).__name__,
-            )
-            msg = "2Captcha could not solve the Canal login challenge"
-            raise CanalCaptchaError(msg) from None
-        if not token:
-            _LOGGER.error(
-                "The reCAPTCHA solver returned an empty solution after %.1f seconds",
-                monotonic() - captcha_started,
-            )
-            msg = "2Captcha returned an empty Canal login token"
-            raise CanalCaptchaError(msg)
-        _LOGGER.info(
-            "Received a reCAPTCHA solution in %.1f seconds",
-            monotonic() - captcha_started,
-        )
+        token = await self._solve_captcha(match.group("sitekey"))
 
         password_name = next(
             (name for name in form.values if name.endswith("password")),
@@ -692,6 +727,77 @@ class CanalClient:
             "Completed automatic Canal login in %.1f seconds",
             monotonic() - started,
         )
+
+    async def _solve_captcha(self, sitekey: str) -> str:
+        """Resolve one challenge with a bounded retry for refunded task failures."""
+        for attempt in range(1, self._captcha_attempts + 1):
+            captcha_started = monotonic()
+            _LOGGER.info(
+                "Requesting invisible enterprise reCAPTCHA solution %d of %d",
+                attempt,
+                self._captcha_attempts,
+            )
+            try:
+                solved = await self._captcha_solver.recaptcha(
+                    sitekey=sitekey,
+                    url=self._login_url,
+                    enterprise=1,
+                    invisible=1,
+                    userAgent=_BROWSER_USER_AGENT,
+                )
+                token = str(solved["code"]).strip()
+            except Exception as err:  # noqa: BLE001 - solver exceptions vary
+                provider_code = _captcha_error_code(err)
+                elapsed = monotonic() - captcha_started
+                if provider_code in _CAPTCHA_ACCOUNT_ERROR_CODES:
+                    _LOGGER.error(  # noqa: TRY400 - do not log the raw error
+                        "The reCAPTCHA account rejected attempt %d after %.1f "
+                        "seconds (%s, code=%s)",
+                        attempt,
+                        elapsed,
+                        type(err).__name__,
+                        provider_code,
+                    )
+                    msg = "The configured 2Captcha account cannot solve challenges"
+                    raise CanalCaptchaCredentialsError(msg) from None
+                if (
+                    provider_code in _CAPTCHA_RETRYABLE_CODES
+                    and attempt < self._captcha_attempts
+                ):
+                    _LOGGER.warning(
+                        "The reCAPTCHA task failed after %.1f seconds (code=%s); "
+                        "submitting another replacement task",
+                        elapsed,
+                        provider_code,
+                    )
+                    continue
+                _LOGGER.error(  # noqa: TRY400 - do not log the raw error
+                    "The reCAPTCHA solver failed on attempt %d after %.1f seconds "
+                    "(%s, code=%s)",
+                    attempt,
+                    elapsed,
+                    type(err).__name__,
+                    provider_code or "unavailable",
+                )
+                msg = "2Captcha temporarily could not solve the Canal login challenge"
+                raise CanalCaptchaError(msg) from None
+            if not token:
+                _LOGGER.error(
+                    "The reCAPTCHA solver returned an empty solution on attempt %d "
+                    "after %.1f seconds",
+                    attempt,
+                    monotonic() - captcha_started,
+                )
+                msg = "2Captcha returned an empty Canal login token"
+                raise CanalCaptchaError(msg)
+            _LOGGER.info(
+                "Received a reCAPTCHA solution on attempt %d in %.1f seconds",
+                attempt,
+                monotonic() - captcha_started,
+            )
+            return token
+        msg = "Unreachable CAPTCHA retry state"
+        raise AssertionError(msg)
 
     async def _switch_contract(self, reference: _ContractReference) -> None:
         _LOGGER.debug("Submitting a Canal portal contract switch request")
@@ -805,7 +911,7 @@ class CanalClient:
         request_started = monotonic()
         safe_path = urlsplit(url).path
         _LOGGER.debug("Starting portal request: %s %s", method, safe_path)
-        request_headers = {"User-Agent": _USER_AGENT, **(headers or {})}
+        request_headers = {"User-Agent": _BROWSER_USER_AGENT, **(headers or {})}
         try:
             response = await self._session.request(
                 method,
@@ -992,14 +1098,16 @@ class CanalClient:
 
     @staticmethod
     def _graph_rows(page: str) -> list[tuple[str, float]]:
-        if "dataJsonConsumo" not in page:
+        graph_match = _CONSUMPTION_GRAPH_RE.search(page)
+        if graph_match is None:
             msg = "The portal response has no consumption graph"
             raise CanalInvalidResponseError(msg)
+        graph = graph_match.group("graph")
         rows = [
             (match.group("label").replace("\\'", "'"), float(match.group("value")))
-            for match in _GRAPH_ROW_RE.finditer(page)
+            for match in _GRAPH_ROW_RE.finditer(graph)
         ]
-        if not rows and not re.search(r"rows\s*:\s*\[\s*\]", page):
+        if not rows and not re.search(r"rows\s*:\s*\[\s*\]", graph):
             msg = "The portal returned an invalid consumption graph"
             raise CanalInvalidResponseError(msg)
         if any(value < 0 for _, value in rows):
@@ -1029,35 +1137,25 @@ def _parse_portal_date(value: str) -> date:
 def _merge_daily(
     existing: tuple[DailyConsumption, ...],
     fresh: list[DailyConsumption],
-    *,
-    replace_from: date,
-    keep_from: date,
 ) -> tuple[DailyConsumption, ...]:
-    merged = {
-        reading.day: reading
-        for reading in existing
-        if keep_from <= reading.day < replace_from
-    }
+    merged = {reading.day: reading for reading in existing}
     merged.update({reading.day: reading for reading in fresh})
-    return tuple(merged[day] for day in sorted(merged) if day >= keep_from)
+    return tuple(merged[day] for day in sorted(merged))
 
 
 def _merge_hourly(
     existing: tuple[ConsumptionReading, ...],
     fresh: list[ConsumptionReading],
-    *,
-    replace_from: date,
-    keep_from: date,
 ) -> tuple[ConsumptionReading, ...]:
-    merged = {
-        reading.start: reading
-        for reading in existing
-        if keep_from
-        <= reading.start.astimezone(_PORTAL_TIME_ZONE).date()
-        < replace_from
-    }
+    merged = {reading.start: reading for reading in existing}
     merged.update({reading.start: reading for reading in fresh})
     return tuple(merged[start] for start in sorted(merged))
+
+
+def _captcha_error_code(error: Exception) -> str | None:
+    """Extract only a safe provider code from an otherwise untrusted error."""
+    match = _CAPTCHA_ERROR_CODE_RE.search(str(error).upper())
+    return match.group(1) if match is not None else None
 
 
 def _parse_decimal(value: str) -> float:

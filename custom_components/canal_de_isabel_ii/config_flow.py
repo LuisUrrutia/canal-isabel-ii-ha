@@ -22,6 +22,7 @@ from .const import (
     CONF_BILLING_CYCLE_DAYS,
     CONF_BILLING_PERIOD_START,
     CONF_CAPTCHA_API_KEY,
+    CONF_CAPTCHA_ATTEMPTS,
     CONF_METER_DIAMETER_MM,
     CONF_MUNICIPAL_SEWER_RATE,
     CONF_PASSWORD,
@@ -34,9 +35,11 @@ from .const import (
     CONF_USERNAME,
     CONFIG_ENTRY_MINOR_VERSION,
     CONFIG_ENTRY_VERSION,
+    DEFAULT_CAPTCHA_ATTEMPTS,
     DEFAULT_NAME,
     DEFAULT_SYNC_HOUR,
     DOMAIN,
+    MAX_CAPTCHA_ATTEMPTS,
 )
 from .tariff_storage import CanalTariffProfileStore
 from .tariffs import SewerProvider, SupplyType, TariffProfile
@@ -227,11 +230,11 @@ class CanalOptionsFlow(OptionsFlow):
         self,
         user_input: dict[str, Any] | None = None,
     ) -> ConfigFlowResult:
-        """Choose between scheduling and contract pricing."""
+        """Choose between synchronization, pricing and manual actions."""
         del user_input
         return self.async_show_menu(
             step_id="init",
-            menu_options=("schedule", "tariff"),
+            menu_options=("schedule", "tariff", "resync"),
         )
 
     async def async_step_schedule(
@@ -242,6 +245,7 @@ class CanalOptionsFlow(OptionsFlow):
         if user_input is not None:
             options = dict(self.config_entry.options)
             options[CONF_SYNC_HOUR] = int(user_input[CONF_SYNC_HOUR])
+            options[CONF_CAPTCHA_ATTEMPTS] = int(user_input[CONF_CAPTCHA_ATTEMPTS])
             return self.async_create_entry(
                 data=options,
             )
@@ -249,6 +253,10 @@ class CanalOptionsFlow(OptionsFlow):
         current_hour = self.config_entry.options.get(
             CONF_SYNC_HOUR,
             DEFAULT_SYNC_HOUR,
+        )
+        current_attempts = self.config_entry.options.get(
+            CONF_CAPTCHA_ATTEMPTS,
+            DEFAULT_CAPTCHA_ATTEMPTS,
         )
         return self.async_show_form(
             step_id="schedule",
@@ -264,10 +272,38 @@ class CanalOptionsFlow(OptionsFlow):
                             step=1,
                             mode=selector.NumberSelectorMode.BOX,
                         )
-                    )
+                    ),
+                    vol.Required(
+                        CONF_CAPTCHA_ATTEMPTS,
+                        default=current_attempts,
+                    ): selector.NumberSelector(
+                        selector.NumberSelectorConfig(
+                            min=1,
+                            max=MAX_CAPTCHA_ATTEMPTS,
+                            step=1,
+                            mode=selector.NumberSelectorMode.BOX,
+                        )
+                    ),
                 }
             ),
         )
+
+    async def async_step_resync(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Confirm and schedule a non-destructive full history refresh."""
+        if user_input is None:
+            return self.async_show_form(
+                step_id="resync",
+                data_schema=vol.Schema({}),
+            )
+        try:
+            coordinator = self.config_entry.runtime_data.coordinator
+        except AttributeError:
+            return self.async_abort(reason="integration_not_loaded")
+        coordinator.async_schedule_full_resync()
+        return self.async_abort(reason="resync_started")
 
     async def async_step_tariff(
         self,

@@ -108,10 +108,9 @@ class CanalContractSensor(CoordinatorEntity[CanalCoordinator], SensorEntity):
     @property
     @override
     def available(self) -> bool:
-        """Return whether the coordinator still contains this contract."""
-        return (
-            super().available and self._contract_id in self.coordinator.data.contracts
-        )
+        """Keep the last valid contract available after a remote refresh fails."""
+        snapshot = self.coordinator.data
+        return snapshot is not None and self._contract_id in snapshot.contracts
 
     @property
     @override
@@ -324,8 +323,20 @@ class CanalEstimatedBillSensor(CanalContractSensor):
             }
         bill, observed_days = estimate
         elapsed_days = (bill.period_end - bill.period_start).days
+        _, period_limit = billing_period_for(self._profile, bill.period_start)
+        cycle_days = (period_limit - bill.period_start).days
+        daily_average_m3 = bill.volume_m3 / observed_days
+        projected_volume_m3 = daily_average_m3 * cycle_days
+        projected_bill = calculate_accrued_bill(
+            projected_volume_m3,
+            bill.period_start,
+            period_limit,
+            period_limit,
+            self._profile,
+        )
         return {
             "billing_period_start": bill.period_start.isoformat(),
+            "billing_period_end": period_limit.isoformat(),
             "calculated_through": bill.period_end.isoformat(),
             "volume_m3": float(bill.volume_m3),
             "variable_cost": float(bill.variable_eur),
@@ -335,6 +346,11 @@ class CanalEstimatedBillSensor(CanalContractSensor):
             "non_taxable_cost": float(bill.non_taxable_eur),
             "observed_days": observed_days,
             "elapsed_days": elapsed_days,
+            "cycle_days": cycle_days,
+            "days_remaining": (period_limit - bill.period_end).days,
+            "daily_average_liters": float(daily_average_m3 * 1000),
+            "projected_volume_m3": float(projected_volume_m3),
+            "projected_total_eur": float(projected_bill.total_eur),
             "history_complete": observed_days == elapsed_days,
             "tariff_version": TARIFF_VERSION,
             "tariff_source": TARIFF_SOURCE_URL,

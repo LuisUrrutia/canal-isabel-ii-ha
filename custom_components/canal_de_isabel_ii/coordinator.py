@@ -13,6 +13,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 
 from .client import (
     CanalAuthenticationError,
+    CanalCaptchaCredentialsError,
     CanalCaptchaError,
     CanalClient,
     CanalConnectionError,
@@ -64,6 +65,16 @@ class CanalCoordinator(DataUpdateCoordinator[ConsumptionSnapshot]):
         self.client = client
         self._store = store
         self._previous: ConsumptionSnapshot | None = None
+        self._full_resync_requested = False
+
+    def async_schedule_full_resync(self) -> None:
+        """Schedule a complete retained-history refresh in the background."""
+        self._full_resync_requested = True
+        self.config_entry.async_create_background_task(
+            self.hass,
+            self.async_refresh(),
+            "Canal full history resynchronization",
+        )
 
     async def async_initialize(self) -> None:
         """Load cached history without blocking setup on remote work."""
@@ -89,11 +100,25 @@ class CanalCoordinator(DataUpdateCoordinator[ConsumptionSnapshot]):
     @override
     async def _async_update_data(self) -> ConsumptionSnapshot:
         """Fetch, merge and persist one atomic portal snapshot."""
-        sync_type = "incremental" if self._previous is not None else "initial"
+        full_resync = self._full_resync_requested
+        self._full_resync_requested = False
+        sync_type = (
+            "full"
+            if full_resync
+            else "incremental"
+            if self._previous is not None
+            else "initial"
+        )
         started = monotonic()
         _LOGGER.info("Starting %s Canal consumption synchronization", sync_type)
         try:
-            snapshot = await self.client.async_fetch_consumption(self._previous)
+            if full_resync:
+                snapshot = await self.client.async_fetch_consumption(
+                    self._previous,
+                    full_resync=True,
+                )
+            else:
+                snapshot = await self.client.async_fetch_consumption(self._previous)
         except CanalAuthenticationError as err:
             _LOGGER.error(  # noqa: TRY400 - portal tracebacks may contain secrets
                 "Canal authentication failed during %s synchronization after "
@@ -103,15 +128,29 @@ class CanalCoordinator(DataUpdateCoordinator[ConsumptionSnapshot]):
                 err,
             )
             raise ConfigEntryAuthFailed(str(err)) from None
-        except CanalCaptchaError as err:
+        except CanalCaptchaCredentialsError as err:
             _LOGGER.error(  # noqa: TRY400 - solver tracebacks may contain secrets
-                "Canal CAPTCHA solving failed during %s synchronization after "
+                "The 2Captcha account failed during %s synchronization after "
                 "%.1f seconds: %s",
                 sync_type,
                 monotonic() - started,
                 err,
             )
             raise ConfigEntryAuthFailed(str(err)) from None
+        except CanalCaptchaError as err:
+            _LOGGER.warning(
+                "Canal CAPTCHA solving temporarily failed during %s "
+                "synchronization after %.1f seconds; retaining cached history "
+                "and retrying in %d seconds: %s",
+                sync_type,
+                monotonic() - started,
+                _CONNECTION_RETRY_SECONDS,
+                err,
+            )
+            raise UpdateFailed(
+                str(err),
+                retry_after=_CONNECTION_RETRY_SECONDS,
+            ) from None
         except CanalConnectionError as err:
             _LOGGER.warning(
                 "Canal portal communication failed during %s synchronization "

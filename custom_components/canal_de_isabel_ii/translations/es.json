@@ -48,15 +48,21 @@
         "title": "Configurar Canal de Isabel II",
         "menu_options": {
           "schedule": "Horario de sincronización",
-          "tariff": "Precio del agua"
+          "tariff": "Precio del agua",
+          "resync": "Resincronizar todo el historial"
         }
       },
       "schedule": {
         "title": "Horario de sincronización",
-        "description": "Elige la hora local para la sincronización incremental diaria.",
+        "description": "Elige la hora local para la sincronización incremental diaria y cuántas tareas CAPTCHA se pueden intentar por cada inicio de sesión.",
         "data": {
-          "sync_hour": "Hora de sincronización (0–23)"
+          "sync_hour": "Hora de sincronización (0–23)",
+          "captcha_attempts": "Máximo de intentos CAPTCHA (1–10)"
         }
+      },
+      "resync": {
+        "title": "Resincronizar todo el historial",
+        "description": "Esta acción enviará tareas CAPTCHA y actualizará todo el historial conservado o, como mínimo, la ventana normal de 183 días. Las lecturas existentes se conservan si el portal omite alguna fila. Pulsa Enviar para comenzar en segundo plano."
       },
       "tariff": {
         "title": "Elige un contrato de agua",
@@ -83,7 +89,9 @@
       "invalid_tariff_profile": "Revisa las fechas, los datos del contador y el alcantarillado. Un prestador municipal requiere una tarifa mayor que cero."
     },
     "abort": {
-      "no_contracts": "Todavía no hay un contrato de agua sincronizado. Espera a que termine correctamente la primera sincronización e inténtalo de nuevo."
+      "no_contracts": "Todavía no hay un contrato de agua sincronizado. Espera a que termine correctamente la primera sincronización e inténtalo de nuevo.",
+      "integration_not_loaded": "La integración no está cargada. Recárgala e inténtalo de nuevo.",
+      "resync_started": "La resincronización completa comenzó en segundo plano. Las lecturas existentes seguirán disponibles mientras se ejecuta."
     }
   },
   "selector": {

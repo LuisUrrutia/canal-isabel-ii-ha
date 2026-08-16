@@ -3,7 +3,7 @@
 from collections.abc import Iterator
 from datetime import date
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import pytest
 from homeassistant.config_entries import SOURCE_REAUTH, SOURCE_RECONFIGURE, SOURCE_USER
@@ -15,6 +15,7 @@ from custom_components.canal_de_isabel_ii.const import (
     CONF_BILLING_CYCLE_DAYS,
     CONF_BILLING_PERIOD_START,
     CONF_CAPTCHA_API_KEY,
+    CONF_CAPTCHA_ATTEMPTS,
     CONF_METER_DIAMETER_MM,
     CONF_MUNICIPAL_SEWER_RATE,
     CONF_PASSWORD,
@@ -228,11 +229,67 @@ async def test_options_flow_stores_daily_sync_hour(hass: HomeAssistant) -> None:
 
     result = await hass.config_entries.options.async_configure(
         result["flow_id"],
-        {CONF_SYNC_HOUR: 5},
+        {CONF_SYNC_HOUR: 5, CONF_CAPTCHA_ATTEMPTS: 5},
     )
 
     assert result["type"] is FlowResultType.CREATE_ENTRY
-    assert result["data"] == {CONF_SYNC_HOUR: 5}
+    assert result["data"] == {
+        CONF_SYNC_HOUR: 5,
+        CONF_CAPTCHA_ATTEMPTS: 5,
+    }
+
+
+async def test_options_flow_stores_captcha_attempts(hass: HomeAssistant) -> None:
+    """Users can tune the bounded CAPTCHA retry count from Configure."""
+    entry = MockConfigEntry(domain=DOMAIN, data=VALID_INPUT, version=3)
+    entry.add_to_hass(hass)
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {"next_step_id": "schedule"},
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_SYNC_HOUR: 5, CONF_CAPTCHA_ATTEMPTS: 7},
+    )
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["data"] == {
+        CONF_SYNC_HOUR: 5,
+        CONF_CAPTCHA_ATTEMPTS: 7,
+    }
+
+
+async def test_options_flow_schedules_full_resynchronization(
+    hass: HomeAssistant,
+) -> None:
+    """The Configure menu exposes a confirmed background full resync action."""
+    entry = MockConfigEntry(domain=DOMAIN, data=VALID_INPUT, version=3)
+    entry.add_to_hass(hass)
+    schedule_full_resync = Mock()
+    entry.runtime_data = SimpleNamespace(
+        coordinator=SimpleNamespace(
+            async_schedule_full_resync=schedule_full_resync,
+        )
+    )
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {"next_step_id": "resync"},
+    )
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "resync"
+
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {},
+    )
+
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "resync_started"
+    schedule_full_resync.assert_called_once_with()
 
 
 async def test_options_flow_saves_tariff_profile_per_contract(

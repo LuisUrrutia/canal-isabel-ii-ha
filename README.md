@@ -1,24 +1,30 @@
 # Canal de Isabel II para Home Assistant
 
-Integración personalizada de Home Assistant para consultar automáticamente el contador y el consumo de agua disponibles en la Oficina Virtual de Canal de Isabel II.
+Integración personalizada para Home Assistant que consulta el contador y las telelecturas de la Oficina Virtual de Canal de Isabel II. Conserva el historial, publica estadísticas para el Panel de Energía y permite estimar el coste del ciclo de facturación.
 
 > [!IMPORTANT]
 > Este proyecto no es oficial ni está afiliado a Canal de Isabel II. La Oficina Virtual no ofrece una API pública conocida; la integración reproduce el comportamiento de su portal web, que puede cambiar sin previo aviso.
 
+## Origen e inspiración
+
+Este proyecto nació inspirado por [la integración de miguelangel-nubla](https://github.com/miguelangel-nubla/homeassistant_canal_isabel_II), cuyo trabajo demostró que era posible incorporar las telelecturas de Canal de Isabel II a Home Assistant y sirvió como referencia inicial.
+
+La integración original resuelve el acceso mediante una cookie `JSESSIONID` obtenida manualmente. A partir de esa base, preferí explorar una experiencia más automatizada: este proyecto inicia sesión con las credenciales del usuario, renueva la sesión cuando es necesario y organiza la extracción, la persistencia y la presentación de los datos en módulos independientes.
+
 ## Funciones
 
 - Inicio de sesión automático con NIF/NIE y contraseña.
-- Resolución del reCAPTCHA invisible mediante 2Captcha en cada inicio o renovación de sesión que lo necesite, sin bloquear el event loop de Home Assistant.
+- Resolución del reCAPTCHA invisible mediante 2Captcha, con cinco intentos predeterminados y un límite configurable entre uno y diez.
 - Detección automática de todos los contratos de la cuenta.
-- Descarga inicial de aproximadamente seis meses de consumos diarios y horarios.
+- Descarga inicial de hasta 183 días de consumos diarios y horarios.
 - Alta inmediata en Home Assistant y sincronización inicial en segundo plano.
-- Historial privado persistente y sincronizaciones incrementales con corrección de los dos últimos días.
+- Historial privado persistente que no descarta lecturas anteriores.
+- Sincronizaciones incrementales con corrección de los dos últimos días.
+- Resincronización completa y no destructiva desde la configuración de la integración.
 - Sincronización diaria a una hora configurable (03:00 de forma predeterminada).
-- Un dispositivo por contrato y tres sensores: contador, consumo horario y consumo diario.
-- Cálculo opcional de la factura estimada con el tarifario oficial 2026, bloques
-  prorrateados, temporadas, cuotas fijas, alcantarillado e IVA.
-- Importación del histórico horario en una estadística externa independiente de
-  las estadísticas automáticas de Recorder.
+- Un dispositivo por contrato y cuatro sensores: contador, consumo horario, consumo diario y factura estimada.
+- Cálculo opcional de la factura estimada con el tarifario oficial 2026, bloques prorrateados, temporadas, cuotas fijas, alcantarillado e IVA.
+- Importación del histórico horario en una estadística externa independiente de las estadísticas automáticas de Recorder.
 - Diagnósticos sin credenciales, contratos, contadores ni direcciones.
 - Traducciones en español e inglés.
 
@@ -54,9 +60,20 @@ Integración personalizada de Home Assistant para consultar automáticamente el 
 3. Selecciona **Añadir integración** y busca **Canal de Isabel II**.
 4. Introduce el NIF o NIE, la contraseña de la Oficina Virtual y la clave API de 2Captcha.
 
-Home Assistant guarda la integración inmediatamente. La validación del acceso, el descubrimiento de contratos y la primera descarga se ejecutan después en segundo plano. Se pueden configurar varias cuentas; un mismo NIF/NIE no puede añadirse dos veces. Si las credenciales o 2Captcha fallan, Home Assistant solicitará una reautenticación.
+Home Assistant guarda la integración inmediatamente. La validación del acceso, el descubrimiento de contratos y la primera descarga se ejecutan después en segundo plano. Puedes configurar varias cuentas, pero un mismo NIF/NIE no puede añadirse dos veces. Home Assistant solo solicita una reautenticación cuando rechaza las credenciales o cuando la cuenta de 2Captcha requiere intervención. Los fallos transitorios conservan los datos y se reintentan más tarde.
 
-La primera sincronización descarga hasta seis meses. Como el portal solo permite consultar los consumos horarios día a día, esta operación puede tardar varios minutos. Durante ese tiempo la integración ya aparece en Home Assistant y las entidades se crean en cuanto se descubre el primer snapshot completo. Las sincronizaciones siguientes solo vuelven a consultar el tramo reciente.
+La primera sincronización descarga hasta 183 días. Como el portal solo permite consultar los consumos horarios día a día, esta operación puede tardar varios minutos. Durante ese tiempo la integración ya aparece en Home Assistant y las entidades se crean en cuanto se obtiene el primer conjunto completo de datos. Las sincronizaciones siguientes solo vuelven a consultar el tramo reciente.
+
+### Configuración de la sincronización
+
+Abre **Configurar > Horario de sincronización** para cambiar:
+
+- La hora local de la sincronización diaria
+- El número máximo de intentos de CAPTCHA por inicio de sesión, entre uno y diez
+
+El valor predeterminado es cinco intentos. Los errores permanentes de cuenta, como una clave inválida o saldo insuficiente, detienen los reintentos inmediatamente.
+
+Selecciona **Configurar > Resincronizar todo el historial** para actualizar manualmente todas las lecturas conservadas. La tarea se ejecuta en segundo plano y mantiene disponibles los datos existentes. El rango comienza en la lectura más antigua guardada o 183 días antes del último dato publicado, lo que resulte más antiguo.
 
 ### Configuración de precios
 
@@ -147,11 +164,13 @@ las cuotas de servicio hacen que ese cálculo no coincida con la factura.
 - La primera ejecución solicita aproximadamente 183 días.
 - Las consultas diarias se dividen por meses para evitar un defecto del portal al cruzar meses.
 - Las consultas horarias se realizan un día cada vez.
-- Después de la primera ejecución se actualizan el último tramo y los dos días de corrección.
-- El historial se guarda mediante el almacenamiento privado y atómico de Home Assistant.
+- Después de la primera ejecución se consultan los días pendientes y los dos últimos días, que pueden recibir correcciones del portal.
+- El historial se guarda mediante el almacenamiento privado y atómico de Home Assistant. Las lecturas ya almacenadas no se eliminan si el portal omite una fila.
 - La sincronización se ejecuta una vez al día a las 03:00, salvo que se cambie desde **Configurar**.
-- Si el portal rechaza el acceso, Home Assistant inicia una reautenticación.
-- Si la sesión del portal caduca durante la descarga, la integración inicia una sesión nueva con CAPTCHA y reintenta el snapshot completo una vez.
+- La resincronización manual recorre todo el historial retenido, con una ventana mínima de 183 días.
+- Si el portal rechaza las credenciales o la cuenta de 2Captcha requiere intervención, Home Assistant inicia una reautenticación.
+- Los errores transitorios de CAPTCHA se reintentan hasta el límite configurado y no ocultan el último conjunto válido de datos.
+- Si la sesión del portal caduca durante la descarga, la integración inicia una sesión nueva con CAPTCHA y reintenta la descarga completa una vez.
 
 ## Registros
 
@@ -165,10 +184,6 @@ logger:
 
 Después reinicia Home Assistant y consulta **Ajustes > Sistema > Registros**. Las trazas de la integración no incluyen el NIF/NIE, la contraseña, la API key, tokens, cookies ni el HTML recibido. Aun así, revisa cualquier registro antes de publicarlo.
 
-## Actualización desde una versión con `JSESSIONID`
-
-La versión 3 sustituye la cookie manual por el inicio de sesión automático. La entrada anterior se conserva, pero Home Assistant solicitará una vez el NIF/NIE, la contraseña y la clave API de 2Captcha. Después ya no será necesario copiar cookies.
-
 ## Seguridad y privacidad
 
 - Las contraseñas y claves API nunca aparecen en los diagnósticos.
@@ -181,7 +196,7 @@ La versión 3 sustituye la cookie manual por el inicio de sesión automático. L
 - El portal no ofrece una API pública estable; cambios en sus formularios o gráficos pueden requerir una actualización de la integración.
 - La disponibilidad, el retraso y la precisión de las telelecturas dependen de Canal de Isabel II.
 - El inicio de sesión automático depende de un servicio externo de resolución de CAPTCHA.
-- Sin Recorder, los tres sensores funcionan, pero no se importa el histórico acumulado.
+- Sin Recorder, los sensores funcionan, pero no se importa el histórico acumulado.
 - El cálculo de precios incluido actualmente cubre usos domésticos y asimilados al
   doméstico durante 2026. Los usos comerciales, industriales y otros usos todavía
   no se calculan.
@@ -196,7 +211,7 @@ Comprueba que puedes acceder a la Oficina Virtual con el mismo NIF/NIE y contras
 
 ### Error de CAPTCHA
 
-Comprueba la clave API y el saldo de 2Captcha. Si la cuenta es válida, inténtalo de nuevo unos minutos más tarde.
+Comprueba la clave API y el saldo de 2Captcha. La integración reintenta automáticamente los errores transitorios hasta el límite configurado. Si la cuenta es válida y el problema continúa, espera unos minutos antes de iniciar una resincronización manual.
 
 ### El portal devuelve una respuesta no compatible
 

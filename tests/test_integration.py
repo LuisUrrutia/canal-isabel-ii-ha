@@ -35,6 +35,7 @@ from pytest_homeassistant_custom_component.components.recorder.common import (
 from custom_components.canal_de_isabel_ii import async_migrate_entry, async_remove_entry
 from custom_components.canal_de_isabel_ii.client import (
     CanalAuthenticationError,
+    CanalCaptchaCredentialsError,
     CanalCaptchaError,
     CanalConnectionError,
 )
@@ -184,8 +185,14 @@ async def test_configured_tariff_creates_estimated_bill_sensor(
     assert cost.attributes["unit_of_measurement"] == "€"
     assert cost.attributes["billing_period_start"] == "2026-07-08"
     assert cost.attributes["calculated_through"] == "2026-08-15"
+    assert cost.attributes["billing_period_end"] == "2026-09-06"
     assert cost.attributes["volume_m3"] == pytest.approx(0.0245)
     assert cost.attributes["observed_days"] == 2
+    assert cost.attributes["cycle_days"] == 60
+    assert cost.attributes["days_remaining"] == 22
+    assert cost.attributes["daily_average_liters"] == pytest.approx(12.25)
+    assert cost.attributes["projected_volume_m3"] == pytest.approx(0.735)
+    assert cost.attributes["projected_total_eur"] == pytest.approx(17.97)
     assert not cost.attributes["history_complete"]
     assert cost.attributes["is_estimate"]
 
@@ -457,6 +464,40 @@ async def test_configured_hour_triggers_one_daily_refresh(
     fetch.assert_awaited_once_with(make_snapshot())
 
 
+async def test_manual_full_resync_reuses_cached_snapshot(
+    hass: HomeAssistant,
+) -> None:
+    """The configuration action requests a full non-destructive refresh."""
+    entry = _entry()
+    entry.add_to_hass(hass)
+    snapshot = make_snapshot()
+    fetch = AsyncMock(return_value=snapshot)
+
+    with (
+        patch(
+            "custom_components.canal_de_isabel_ii.client."
+            "CanalClient.async_fetch_consumption",
+            fetch,
+        ),
+        patch(
+            "custom_components.canal_de_isabel_ii.storage.CanalHistoryStore.async_load",
+            return_value=snapshot,
+        ),
+        patch(
+            "custom_components.canal_de_isabel_ii.storage.CanalHistoryStore.async_save",
+            return_value=None,
+        ),
+    ):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+        fetch.reset_mock()
+
+        entry.runtime_data.coordinator.async_schedule_full_resync()
+        await hass.async_block_till_done()
+
+    fetch.assert_awaited_once_with(snapshot, full_resync=True)
+
+
 async def test_legacy_entry_migrates_then_requests_reauthentication(
     hass: HomeAssistant,
 ) -> None:
@@ -486,7 +527,7 @@ async def test_legacy_entry_migrates_then_requests_reauthentication(
     "failure",
     [
         CanalAuthenticationError("rejected"),
-        CanalCaptchaError("solver failed"),
+        CanalCaptchaCredentialsError("invalid solver account"),
     ],
 )
 async def test_authentication_failure_starts_reauthentication(
@@ -514,6 +555,60 @@ async def test_authentication_failure_starts_reauthentication(
     flows = hass.config_entries.flow.async_progress_by_handler(DOMAIN)
     assert len(flows) == 1
     assert flows[0]["context"]["source"] == "reauth"
+
+
+async def test_cached_sensors_remain_available_when_captcha_refresh_fails(
+    hass: HomeAssistant,
+) -> None:
+    """A failed portal refresh must not hide the last valid cached snapshot."""
+    entry = _entry()
+    entry.add_to_hass(hass)
+    profile = TariffProfile(
+        supply_type=SupplyType.SINGLE_DWELLING,
+        sewer_provider=SewerProvider.MUNICIPALITY,
+        meter_diameter_mm=15,
+        supplied_uses=1,
+        billing_period_start=date(2026, 7, 8),
+        billing_cycle_days=60,
+        municipal_sewer_rate_eur_m3=Decimal("0.2200"),
+    )
+
+    with (
+        patch(
+            "custom_components.canal_de_isabel_ii.client."
+            "CanalClient.async_fetch_consumption",
+            side_effect=CanalCaptchaError("solver failed"),
+        ),
+        patch(
+            "custom_components.canal_de_isabel_ii.storage.CanalHistoryStore.async_load",
+            return_value=make_snapshot(),
+        ),
+        patch(
+            "custom_components.canal_de_isabel_ii.CanalTariffProfileStore.async_load",
+            return_value={"contract-123": profile},
+        ),
+    ):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    registry = er.async_get(hass)
+    daily_id = registry.async_get_entity_id(
+        "sensor", DOMAIN, "canal_ii_daily_contract-123"
+    )
+    cost_id = registry.async_get_entity_id(
+        "sensor", DOMAIN, "canal_ii_estimated_bill_contract-123"
+    )
+    assert daily_id is not None
+    assert cost_id is not None
+
+    daily = hass.states.get(daily_id)
+    cost = hass.states.get(cost_id)
+    assert daily is not None
+    assert cost is not None
+    assert daily.state == "15.5"
+    assert daily.attributes["reading_day"] == "2026-08-14"
+    assert cost.attributes["projected_total_eur"] == pytest.approx(17.97)
+    assert hass.config_entries.flow.async_progress_by_handler(DOMAIN) == []
 
 
 async def test_temporary_portal_failure_remains_retryable(hass: HomeAssistant) -> None:

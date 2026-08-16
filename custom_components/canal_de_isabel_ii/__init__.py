@@ -14,11 +14,13 @@ from homeassistant.helpers.event import async_track_time_change
 from .client import CanalClient, CanalCredentials
 from .const import (
     CONF_CAPTCHA_API_KEY,
+    CONF_CAPTCHA_ATTEMPTS,
     CONF_PASSWORD,
     CONF_SYNC_HOUR,
     CONF_USERNAME,
     CONFIG_ENTRY_MINOR_VERSION,
     CONFIG_ENTRY_VERSION,
+    DEFAULT_CAPTCHA_ATTEMPTS,
     DEFAULT_SYNC_HOUR,
     DOMAIN,
 )
@@ -90,7 +92,13 @@ async def async_setup_entry(
         hass,
         cookie_jar=CookieJar(),
     )
-    client = CanalClient(session, credentials)
+    client = CanalClient(
+        session,
+        credentials,
+        captcha_attempts=int(
+            entry.options.get(CONF_CAPTCHA_ATTEMPTS, DEFAULT_CAPTCHA_ATTEMPTS)
+        ),
+    )
     store = CanalHistoryStore(hass, entry.entry_id)
     tariff_store = CanalTariffProfileStore(hass, entry.entry_id)
     tariff_profiles = await tariff_store.async_load()

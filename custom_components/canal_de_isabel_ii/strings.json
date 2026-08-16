@@ -48,15 +48,21 @@
         "title": "Configure Canal de Isabel II",
         "menu_options": {
           "schedule": "Synchronization schedule",
-          "tariff": "Water pricing"
+          "tariff": "Water pricing",
+          "resync": "Resynchronize all history"
         }
       },
       "schedule": {
         "title": "Synchronization schedule",
-        "description": "Choose the local hour for the daily incremental synchronization.",
+        "description": "Choose the local hour for the daily incremental synchronization and how many CAPTCHA tasks may be attempted per login.",
         "data": {
-          "sync_hour": "Synchronization hour (0–23)"
+          "sync_hour": "Synchronization hour (0–23)",
+          "captcha_attempts": "Maximum CAPTCHA attempts (1–10)"
         }
+      },
+      "resync": {
+        "title": "Resynchronize all history",
+        "description": "This submits CAPTCHA tasks and refreshes the entire retained history, or at least the normal 183-day window. Existing readings are preserved when the portal omits a row. Press Submit to start in the background."
       },
       "tariff": {
         "title": "Choose a water contract",
@@ -83,7 +89,9 @@
       "invalid_tariff_profile": "Check the billing dates, meter data and sewer-service settings. A municipal provider requires a rate greater than zero."
     },
     "abort": {
-      "no_contracts": "No synchronized water contract is available yet. Wait for the first successful portal synchronization and try again."
+      "no_contracts": "No synchronized water contract is available yet. Wait for the first successful portal synchronization and try again.",
+      "integration_not_loaded": "The integration is not loaded. Reload it and try again.",
+      "resync_started": "Full history resynchronization started in the background. Existing readings remain available while it runs."
     }
   },
   "selector": {
