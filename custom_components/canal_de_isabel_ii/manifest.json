@@ -1,10 +1,10 @@
 {
     "domain": "canal_de_isabel_ii",
     "name": "Canal de Isabel II",
+    "after_dependencies": ["recorder"],
     "codeowners": ["@LuisUrrutia"],
     "config_flow": true,
     "documentation": "https://github.com/LuisUrrutia/canal-isabel-ii-ha",
-    "after_dependencies": ["recorder"],
     "integration_type": "service",
     "iot_class": "cloud_polling",
     "issue_tracker": "https://github.com/LuisUrrutia/canal-isabel-ii-ha/issues",
