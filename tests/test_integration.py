@@ -10,8 +10,17 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from homeassistant.components.recorder import get_instance
 from homeassistant.components.recorder.core import Recorder
-from homeassistant.components.recorder.statistics import statistics_during_period
+from homeassistant.components.recorder.models import (
+    StatisticData,
+    StatisticMeanType,
+    StatisticMetaData,
+)
+from homeassistant.components.recorder.statistics import (
+    async_add_external_statistics,
+    statistics_during_period,
+)
 from homeassistant.config_entries import ConfigEntryState
+from homeassistant.const import CURRENCY_EURO
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 from homeassistant.util import dt as dt_util
@@ -315,6 +324,27 @@ async def test_configured_tariff_backfills_external_cost_statistics(
         },
     )
 
+    async_add_external_statistics(
+        hass,
+        StatisticMetaData(
+            mean_type=StatisticMeanType.NONE,
+            has_sum=True,
+            name="Stale shifted water cost",
+            source=DOMAIN,
+            statistic_id=EXTERNAL_COST_STATISTIC_ID,
+            unit_class=None,
+            unit_of_measurement=CURRENCY_EURO,
+        ),
+        [
+            StatisticData(
+                start=datetime(2026, 7, 8, 22, tzinfo=UTC),
+                state=999,
+                sum=999,
+            )
+        ],
+    )
+    await async_wait_recording_done(hass)
+
     with (
         patch(
             "custom_components.canal_de_isabel_ii.client."
@@ -341,7 +371,7 @@ async def test_configured_tariff_backfills_external_cost_statistics(
     statistics = await get_instance(hass).async_add_executor_job(
         statistics_during_period,
         hass,
-        datetime(2026, 7, 7, tzinfo=UTC),
+        datetime(2026, 7, 6, tzinfo=UTC),
         None,
         {EXTERNAL_COST_STATISTIC_ID},
         "hour",
@@ -351,6 +381,10 @@ async def test_configured_tariff_backfills_external_cost_statistics(
 
     rows = statistics[EXTERNAL_COST_STATISTIC_ID]
     assert len(rows) == 2
+    assert [row["start"] for row in rows] == [
+        datetime(2026, 7, 6, 22, tzinfo=UTC).timestamp(),
+        datetime(2026, 7, 7, 22, tzinfo=UTC).timestamp(),
+    ]
     assert rows[-1]["state"] < rows[0]["state"]
     assert rows[-1]["sum"] > rows[0]["sum"] > 0
 

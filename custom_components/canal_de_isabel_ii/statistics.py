@@ -8,6 +8,7 @@ from decimal import Decimal
 from typing import TYPE_CHECKING
 from zoneinfo import ZoneInfo
 
+from homeassistant.components.recorder import get_instance
 from homeassistant.components.recorder.models import (
     StatisticData,
     StatisticMeanType,
@@ -131,6 +132,7 @@ class CanalCostStatisticsImporter:
         self._hass = hass
         self._profile = profile
         self._statistic_id = cost_statistic_id(contract_id)
+        self._history_rebuilt = False
 
     @callback
     def async_import(self, contract: ContractConsumption, *, name: str) -> None:
@@ -181,7 +183,7 @@ class CanalCostStatisticsImporter:
             statistics.append(
                 StatisticData(
                     start=datetime.combine(
-                        calculated_through,
+                        day,
                         time.min,
                         tzinfo=_PORTAL_TIME_ZONE,
                     ),
@@ -192,12 +194,6 @@ class CanalCostStatisticsImporter:
 
         if not statistics:
             return
-        _LOGGER.debug(
-            "Importing %d external historical water cost point(s); skipped %d "
-            "point(s) outside the tariff catalog",
-            len(statistics),
-            skipped_points,
-        )
         metadata = StatisticMetaData(
             mean_type=StatisticMeanType.NONE,
             has_sum=True,
@@ -207,4 +203,45 @@ class CanalCostStatisticsImporter:
             unit_class=None,
             unit_of_measurement=CURRENCY_EURO,
         )
-        async_add_external_statistics(self._hass, metadata, statistics)
+        self._async_publish(metadata, statistics, skipped_points=skipped_points)
+
+    @callback
+    def _async_publish(
+        self,
+        metadata: StatisticMetaData,
+        statistics: list[StatisticData],
+        *,
+        skipped_points: int,
+    ) -> None:
+        """Publish corrected cost history, replacing legacy timestamps once."""
+        if self._history_rebuilt:
+            _LOGGER.debug(
+                "Importing %d day-aligned historical water cost point(s); "
+                "skipped %d point(s) outside the tariff catalog",
+                len(statistics),
+                skipped_points,
+            )
+            async_add_external_statistics(self._hass, metadata, statistics)
+            return
+
+        self._history_rebuilt = True
+        _LOGGER.info(
+            "Rebuilding the external water cost statistic with %d day-aligned "
+            "point(s); skipped %d point(s) outside the tariff catalog",
+            len(statistics),
+            skipped_points,
+        )
+
+        def import_after_clear() -> None:
+            """Import corrected timestamps after Recorder removes stale points."""
+            self._hass.add_job(
+                async_add_external_statistics,
+                self._hass,
+                metadata,
+                statistics,
+            )
+
+        get_instance(self._hass).async_clear_statistics(
+            [self._statistic_id],
+            on_done=import_after_clear,
+        )
