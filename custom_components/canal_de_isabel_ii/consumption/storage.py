@@ -8,7 +8,8 @@ from typing import TYPE_CHECKING, Any
 
 from homeassistant.helpers.storage import Store
 
-from .const import DOMAIN
+from custom_components.canal_de_isabel_ii.const import DOMAIN
+
 from .models import (
     ConsumptionReading,
     ConsumptionSnapshot,

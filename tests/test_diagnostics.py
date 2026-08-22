@@ -38,16 +38,16 @@ async def test_diagnostics_describe_health_without_personal_data(
     entry.add_to_hass(hass)
     with (
         patch(
-            "custom_components.canal_de_isabel_ii.client."
+            "custom_components.canal_de_isabel_ii.portal.client."
             "CanalClient.async_fetch_consumption",
             return_value=make_snapshot(),
         ),
         patch(
-            "custom_components.canal_de_isabel_ii.storage.CanalHistoryStore.async_load",
+            "custom_components.canal_de_isabel_ii.consumption.storage.CanalHistoryStore.async_load",
             return_value=None,
         ),
         patch(
-            "custom_components.canal_de_isabel_ii.storage.CanalHistoryStore.async_save",
+            "custom_components.canal_de_isabel_ii.consumption.storage.CanalHistoryStore.async_save",
             return_value=None,
         ),
     ):

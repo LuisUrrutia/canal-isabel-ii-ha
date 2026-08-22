@@ -20,8 +20,12 @@ from homeassistant.core import callback
 from homeassistant.util import slugify
 from homeassistant.util.unit_conversion import VolumeConverter
 
-from .const import DOMAIN
-from .tariffs import TariffProfile, billing_period_for, calculate_accrued_bill
+from custom_components.canal_de_isabel_ii.billing import (
+    TariffProfile,
+    billing_period_for,
+    calculate_accrued_bill,
+)
+from custom_components.canal_de_isabel_ii.const import DOMAIN
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
@@ -31,6 +35,7 @@ if TYPE_CHECKING:
 _LOGGER = logging.getLogger(__name__)
 _PORTAL_TIME_ZONE = ZoneInfo("Europe/Madrid")
 _ONE_DAY = timedelta(days=1)
+_LITERS_PER_CUBIC_METER = Decimal(1000)
 
 
 def water_statistic_id(contract_id: str) -> str:
@@ -69,8 +74,13 @@ class CanalWaterStatisticsImporter:
             for reading in contract.hourly_readings
             if reading.start <= meter_reading_at
         )
-        running = meter_value - sum(
-            reading.volume_liters / 1000 for reading in eligible
+        meter_value_decimal = Decimal(str(meter_value))
+        running = meter_value_decimal - sum(
+            (
+                Decimal(str(reading.volume_liters)) / _LITERS_PER_CUBIC_METER
+                for reading in eligible
+            ),
+            start=Decimal(0),
         )
         cutoff = (
             self._last_imported_at - timedelta(days=2)
@@ -79,13 +89,14 @@ class CanalWaterStatisticsImporter:
         )
         statistics: list[StatisticData] = []
         for reading in eligible:
-            running += reading.volume_liters / 1000
+            running += Decimal(str(reading.volume_liters)) / _LITERS_PER_CUBIC_METER
             if cutoff is None or reading.start >= cutoff:
+                value = float(running)
                 statistics.append(
                     StatisticData(
                         start=reading.start,
-                        state=running,
-                        sum=running,
+                        state=value,
+                        sum=value,
                     )
                 )
 

@@ -11,6 +11,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from custom_components.canal_de_isabel_ii.billing import SewerProvider, SupplyType
 from custom_components.canal_de_isabel_ii.const import (
     CONF_BILLING_CYCLE_DAYS,
     CONF_BILLING_PERIOD_START,
@@ -28,7 +29,6 @@ from custom_components.canal_de_isabel_ii.const import (
     CONF_USERNAME,
     DOMAIN,
 )
-from custom_components.canal_de_isabel_ii.tariffs import SewerProvider, SupplyType
 
 from .factories import make_snapshot
 
@@ -72,7 +72,7 @@ async def test_user_flow_creates_account_entry(hass: HomeAssistant) -> None:
 async def test_user_flow_saves_before_any_remote_work(hass: HomeAssistant) -> None:
     """Submitting credentials must not wait for CAPTCHA or portal scraping."""
     with patch(
-        "custom_components.canal_de_isabel_ii.client."
+        "custom_components.canal_de_isabel_ii.portal.client."
         "CanalClient.async_validate_credentials",
         side_effect=AssertionError("The config flow contacted the portal"),
     ):

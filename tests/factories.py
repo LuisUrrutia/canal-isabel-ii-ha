@@ -2,7 +2,7 @@
 
 from datetime import UTC, date, datetime
 
-from custom_components.canal_de_isabel_ii.models import (
+from custom_components.canal_de_isabel_ii.consumption import (
     ConsumptionReading,
     ConsumptionSnapshot,
     ContractConsumption,

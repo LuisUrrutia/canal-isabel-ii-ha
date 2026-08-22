@@ -18,10 +18,7 @@ from homeassistant.core import callback
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN
-from .coordinator import CanalConfigEntry, CanalCoordinator
-from .statistics import CanalCostStatisticsImporter, CanalWaterStatisticsImporter
-from .tariffs import (
+from .billing import (
     TARIFF_SOURCE_URL,
     TARIFF_VERSION,
     BillEstimate,
@@ -29,12 +26,18 @@ from .tariffs import (
     billing_period_for,
     calculate_accrued_bill,
 )
+from .const import DOMAIN
+from .consumption.statistics import (
+    CanalCostStatisticsImporter,
+    CanalWaterStatisticsImporter,
+)
+from .coordinator import CanalConfigEntry, CanalCoordinator
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
     from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-    from .models import ContractConsumption
+    from .consumption import ContractConsumption
 
 PARALLEL_UPDATES = 0
 _PORTAL_TIME_ZONE = ZoneInfo("Europe/Madrid")
@@ -94,6 +97,7 @@ class CanalContractSensor(CoordinatorEntity[CanalCoordinator], SensorEntity):
 
     _attr_has_entity_name = True
     _attr_device_class = SensorDeviceClass.WATER
+    _attr_suggested_display_precision = 2
 
     def __init__(self, coordinator: CanalCoordinator, contract_id: str) -> None:
         """Initialize the contract sensor."""

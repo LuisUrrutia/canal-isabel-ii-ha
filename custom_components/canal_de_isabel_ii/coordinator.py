@@ -11,7 +11,9 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from .client import (
+from .const import DOMAIN
+from .consumption import ConsumptionSnapshot
+from .portal import (
     CanalAuthenticationError,
     CanalCaptchaCredentialsError,
     CanalCaptchaError,
@@ -19,15 +21,13 @@ from .client import (
     CanalConnectionError,
     CanalInvalidResponseError,
 )
-from .const import DOMAIN
-from .models import ConsumptionSnapshot
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
     from homeassistant.core import HomeAssistant
 
-    from .tariffs import TariffProfile
+    from .billing import TariffProfile
 
 _LOGGER = logging.getLogger(__name__)
 _CONNECTION_RETRY_SECONDS = 30 * 60

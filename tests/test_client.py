@@ -11,8 +11,13 @@ import pytest
 from aiohttp import web
 from pytest_aiohttp.plugin import AiohttpClient
 
-from custom_components.canal_de_isabel_ii import client as client_module
-from custom_components.canal_de_isabel_ii.client import (
+from custom_components.canal_de_isabel_ii.consumption import (
+    ConsumptionReading,
+    ConsumptionSnapshot,
+    ContractConsumption,
+    DailyConsumption,
+)
+from custom_components.canal_de_isabel_ii.portal import (
     CanalAuthenticationError,
     CanalCaptchaCredentialsError,
     CanalCaptchaError,
@@ -21,12 +26,7 @@ from custom_components.canal_de_isabel_ii.client import (
     CanalCredentials,
     CanalInvalidResponseError,
 )
-from custom_components.canal_de_isabel_ii.models import (
-    ConsumptionReading,
-    ConsumptionSnapshot,
-    ContractConsumption,
-    DailyConsumption,
-)
+from custom_components.canal_de_isabel_ii.portal import client as client_module
 
 CONTRACTS = {
     "contract-a": ("meter-a", "Address A", 1234.5),
@@ -492,7 +492,7 @@ async def test_debug_logs_report_progress_without_secrets(
     """Detailed scrape logs remain useful and safe to share after review."""
     caplog.set_level(
         logging.DEBUG,
-        logger="custom_components.canal_de_isabel_ii.client",
+        logger="custom_components.canal_de_isabel_ii.portal.client",
     )
     state = PortalState(contracts={"contract-a": CONTRACTS["contract-a"]})
     client, _ = await make_client(aiohttp_client, state, history_days=1)
@@ -502,7 +502,7 @@ async def test_debug_logs_report_progress_without_secrets(
     messages = "\n".join(
         record.getMessage()
         for record in caplog.records
-        if record.name == "custom_components.canal_de_isabel_ii.client"
+        if record.name == "custom_components.canal_de_isabel_ii.portal.client"
     )
     assert "Starting initial portal scrape" in messages
     assert "Requesting invisible enterprise reCAPTCHA solution 1 of 5" in messages

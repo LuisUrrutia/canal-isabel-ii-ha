@@ -9,8 +9,9 @@ from typing import TYPE_CHECKING, Any
 
 from homeassistant.helpers.storage import Store
 
-from .const import DOMAIN
-from .tariffs import SewerProvider, SupplyType, TariffProfile
+from custom_components.canal_de_isabel_ii.const import DOMAIN
+
+from .calculator import SewerProvider, SupplyType, TariffProfile
 
 if TYPE_CHECKING:
     from collections.abc import Mapping

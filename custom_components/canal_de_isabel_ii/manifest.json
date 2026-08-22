@@ -4,10 +4,10 @@
     "after_dependencies": ["recorder"],
     "codeowners": ["@LuisUrrutia"],
     "config_flow": true,
-    "documentation": "https://github.com/LuisUrrutia/canal-isabel-ii-ha",
+    "documentation": "https://github.com/LuisUrrutia/canal-isabel-ii-homeassistant",
     "integration_type": "service",
     "iot_class": "cloud_polling",
-    "issue_tracker": "https://github.com/LuisUrrutia/canal-isabel-ii-ha/issues",
+    "issue_tracker": "https://github.com/LuisUrrutia/canal-isabel-ii-homeassistant/issues",
     "requirements": ["2captcha-python==2.1.0"],
-    "version": "3.5.0"
+    "version": "3.5.1"
 }

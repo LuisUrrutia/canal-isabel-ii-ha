@@ -238,6 +238,17 @@ uv run ruff check .
 uv run pytest --cov=custom_components/canal_de_isabel_ii --cov-fail-under=95
 ```
 
+La integración conserva en su raíz únicamente los puntos de entrada reconocidos por
+Home Assistant. La implementación se agrupa en tres módulos internos:
+
+- `portal`: autenticación, CAPTCHA, navegación y normalización de la Oficina Virtual.
+- `consumption`: modelos, almacenamiento y estadísticas de consumo.
+- `billing`: cálculo tarifario versionado y almacenamiento de perfiles de facturación.
+
+Los módulos exponen sus interfaces desde sus respectivos `__init__.py`; el resto de
+la implementación se considera privada y puede cambiar sin afectar a los puntos de
+entrada de Home Assistant.
+
 La CI valida además el repositorio con Hassfest y HACS.
 
 ## Licencia

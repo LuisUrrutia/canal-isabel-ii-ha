@@ -11,7 +11,7 @@ from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers import aiohttp_client
 from homeassistant.helpers.event import async_track_time_change
 
-from .client import CanalClient, CanalCredentials
+from .billing.storage import CanalTariffProfileStore
 from .const import (
     CONF_CAPTCHA_API_KEY,
     CONF_CAPTCHA_ATTEMPTS,
@@ -24,9 +24,9 @@ from .const import (
     DEFAULT_SYNC_HOUR,
     DOMAIN,
 )
+from .consumption.storage import CanalHistoryStore
 from .coordinator import CanalConfigEntry, CanalCoordinator, CanalRuntimeData
-from .storage import CanalHistoryStore
-from .tariff_storage import CanalTariffProfileStore
+from .portal import CanalClient, CanalCredentials
 
 if TYPE_CHECKING:
     from datetime import datetime

@@ -18,13 +18,13 @@ from zoneinfo import ZoneInfo
 from aiohttp import ClientError, ClientSession, ClientTimeout, FormData
 from twocaptcha import TwoCaptcha
 
-from .const import (
+from custom_components.canal_de_isabel_ii.const import (
     BASE_URL,
     CONSUMPTION_URL,
     DEFAULT_CAPTCHA_ATTEMPTS,
     MAX_CAPTCHA_ATTEMPTS,
 )
-from .models import (
+from custom_components.canal_de_isabel_ii.consumption import (
     ConsumptionReading,
     ConsumptionSnapshot,
     ContractConsumption,

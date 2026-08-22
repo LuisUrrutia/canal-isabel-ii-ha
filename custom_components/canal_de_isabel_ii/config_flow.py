@@ -17,7 +17,8 @@ from homeassistant.config_entries import (
 from homeassistant.helpers import selector
 from homeassistant.util import dt as dt_util
 
-from .client import CanalCredentials
+from .billing import SewerProvider, SupplyType, TariffProfile
+from .billing.storage import CanalTariffProfileStore
 from .const import (
     CONF_BILLING_CYCLE_DAYS,
     CONF_BILLING_PERIOD_START,
@@ -41,8 +42,7 @@ from .const import (
     DOMAIN,
     MAX_CAPTCHA_ATTEMPTS,
 )
-from .tariff_storage import CanalTariffProfileStore
-from .tariffs import SewerProvider, SupplyType, TariffProfile
+from .portal import CanalCredentials
 
 if TYPE_CHECKING:
     from collections.abc import Mapping

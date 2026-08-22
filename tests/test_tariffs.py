@@ -5,7 +5,7 @@ from decimal import Decimal
 
 import pytest
 
-from custom_components.canal_de_isabel_ii.tariffs import (
+from custom_components.canal_de_isabel_ii.billing import (
     SewerProvider,
     SupplyType,
     TariffProfile,

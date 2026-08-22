@@ -33,11 +33,10 @@ from pytest_homeassistant_custom_component.components.recorder.common import (
 )
 
 from custom_components.canal_de_isabel_ii import async_migrate_entry, async_remove_entry
-from custom_components.canal_de_isabel_ii.client import (
-    CanalAuthenticationError,
-    CanalCaptchaCredentialsError,
-    CanalCaptchaError,
-    CanalConnectionError,
+from custom_components.canal_de_isabel_ii.billing import (
+    SewerProvider,
+    SupplyType,
+    TariffProfile,
 )
 from custom_components.canal_de_isabel_ii.const import (
     CONF_CAPTCHA_API_KEY,
@@ -46,11 +45,19 @@ from custom_components.canal_de_isabel_ii.const import (
     CONF_USERNAME,
     DOMAIN,
 )
-from custom_components.canal_de_isabel_ii.models import DailyConsumption
-from custom_components.canal_de_isabel_ii.tariffs import (
-    SewerProvider,
-    SupplyType,
-    TariffProfile,
+from custom_components.canal_de_isabel_ii.consumption import (
+    ConsumptionReading,
+    ContractConsumption,
+    DailyConsumption,
+)
+from custom_components.canal_de_isabel_ii.consumption.statistics import (
+    CanalWaterStatisticsImporter,
+)
+from custom_components.canal_de_isabel_ii.portal import (
+    CanalAuthenticationError,
+    CanalCaptchaCredentialsError,
+    CanalCaptchaError,
+    CanalConnectionError,
 )
 
 from .factories import make_snapshot
@@ -88,16 +95,16 @@ async def test_setup_creates_three_water_sensors(hass: HomeAssistant) -> None:
 
     with (
         patch(
-            "custom_components.canal_de_isabel_ii.client."
+            "custom_components.canal_de_isabel_ii.portal.client."
             "CanalClient.async_fetch_consumption",
             return_value=make_snapshot(),
         ),
         patch(
-            "custom_components.canal_de_isabel_ii.storage.CanalHistoryStore.async_load",
+            "custom_components.canal_de_isabel_ii.consumption.storage.CanalHistoryStore.async_load",
             return_value=None,
         ),
         patch(
-            "custom_components.canal_de_isabel_ii.storage.CanalHistoryStore.async_save",
+            "custom_components.canal_de_isabel_ii.consumption.storage.CanalHistoryStore.async_save",
             return_value=None,
         ),
     ):
@@ -151,16 +158,16 @@ async def test_configured_tariff_creates_estimated_bill_sensor(
     )
     with (
         patch(
-            "custom_components.canal_de_isabel_ii.client."
+            "custom_components.canal_de_isabel_ii.portal.client."
             "CanalClient.async_fetch_consumption",
             return_value=make_snapshot(),
         ),
         patch(
-            "custom_components.canal_de_isabel_ii.storage.CanalHistoryStore.async_load",
+            "custom_components.canal_de_isabel_ii.consumption.storage.CanalHistoryStore.async_load",
             return_value=None,
         ),
         patch(
-            "custom_components.canal_de_isabel_ii.storage.CanalHistoryStore.async_save",
+            "custom_components.canal_de_isabel_ii.consumption.storage.CanalHistoryStore.async_save",
             return_value=None,
         ),
         patch(
@@ -213,16 +220,16 @@ async def test_setup_finishes_while_initial_sync_runs_in_background(
 
     with (
         patch(
-            "custom_components.canal_de_isabel_ii.client."
+            "custom_components.canal_de_isabel_ii.portal.client."
             "CanalClient.async_fetch_consumption",
             side_effect=slow_fetch,
         ),
         patch(
-            "custom_components.canal_de_isabel_ii.storage.CanalHistoryStore.async_load",
+            "custom_components.canal_de_isabel_ii.consumption.storage.CanalHistoryStore.async_load",
             return_value=None,
         ),
         patch(
-            "custom_components.canal_de_isabel_ii.storage.CanalHistoryStore.async_save",
+            "custom_components.canal_de_isabel_ii.consumption.storage.CanalHistoryStore.async_save",
             return_value=None,
         ),
     ):
@@ -255,16 +262,16 @@ async def test_setup_backfills_dedicated_external_water_statistics(
 
     with (
         patch(
-            "custom_components.canal_de_isabel_ii.client."
+            "custom_components.canal_de_isabel_ii.portal.client."
             "CanalClient.async_fetch_consumption",
             return_value=make_snapshot(),
         ),
         patch(
-            "custom_components.canal_de_isabel_ii.storage.CanalHistoryStore.async_load",
+            "custom_components.canal_de_isabel_ii.consumption.storage.CanalHistoryStore.async_load",
             return_value=None,
         ),
         patch(
-            "custom_components.canal_de_isabel_ii.storage.CanalHistoryStore.async_save",
+            "custom_components.canal_de_isabel_ii.consumption.storage.CanalHistoryStore.async_save",
             return_value=None,
         ),
     ):
@@ -297,6 +304,39 @@ async def test_setup_backfills_dedicated_external_water_statistics(
     assert rows[-1]["sum"] == pytest.approx(125.5)
     assert all(
         current["sum"] <= following["sum"] for current, following in pairwise(rows)
+    )
+
+
+async def test_water_statistics_do_not_publish_negative_float_artifacts(
+    hass: HomeAssistant,
+    recorder_mock: Recorder,
+) -> None:
+    """The final meter anchor never creates a microscopic negative change."""
+    contract = ContractConsumption(
+        contract_id="contract-123",
+        meter_id="meter-456",
+        address="Calle de Alcalá 1",
+        meter_reading_m3=2818.658,
+        meter_reading_at=datetime(2026, 8, 15, 1, tzinfo=UTC),
+        daily_readings=(),
+        hourly_readings=(
+            ConsumptionReading(
+                start=datetime(2026, 8, 15, tzinfo=UTC),
+                volume_liters=4515.4,
+            ),
+        ),
+    )
+    importer = CanalWaterStatisticsImporter(hass, contract.contract_id)
+
+    with patch(
+        "custom_components.canal_de_isabel_ii.consumption.statistics.async_add_external_statistics"
+    ) as add_statistics:
+        importer.async_import(contract, name="Water")
+
+    points = add_statistics.call_args.args[2]
+    assert points[-2]["sum"] == points[-1]["sum"]
+    assert all(
+        current["sum"] <= following["sum"] for current, following in pairwise(points)
     )
 
 
@@ -354,16 +394,16 @@ async def test_configured_tariff_backfills_external_cost_statistics(
 
     with (
         patch(
-            "custom_components.canal_de_isabel_ii.client."
+            "custom_components.canal_de_isabel_ii.portal.client."
             "CanalClient.async_fetch_consumption",
             return_value=snapshot,
         ),
         patch(
-            "custom_components.canal_de_isabel_ii.storage.CanalHistoryStore.async_load",
+            "custom_components.canal_de_isabel_ii.consumption.storage.CanalHistoryStore.async_load",
             return_value=None,
         ),
         patch(
-            "custom_components.canal_de_isabel_ii.storage.CanalHistoryStore.async_save",
+            "custom_components.canal_de_isabel_ii.consumption.storage.CanalHistoryStore.async_save",
             return_value=None,
         ),
         patch(
@@ -407,16 +447,16 @@ async def test_cached_snapshot_is_used_for_incremental_refresh(
 
     with (
         patch(
-            "custom_components.canal_de_isabel_ii.client."
+            "custom_components.canal_de_isabel_ii.portal.client."
             "CanalClient.async_fetch_consumption",
             return_value=refreshed,
         ) as fetch,
         patch(
-            "custom_components.canal_de_isabel_ii.storage.CanalHistoryStore.async_load",
+            "custom_components.canal_de_isabel_ii.consumption.storage.CanalHistoryStore.async_load",
             return_value=cached,
         ),
         patch(
-            "custom_components.canal_de_isabel_ii.storage.CanalHistoryStore.async_save",
+            "custom_components.canal_de_isabel_ii.consumption.storage.CanalHistoryStore.async_save",
             return_value=None,
         ) as save,
     ):
@@ -437,16 +477,16 @@ async def test_configured_hour_triggers_one_daily_refresh(
 
     with (
         patch(
-            "custom_components.canal_de_isabel_ii.client."
+            "custom_components.canal_de_isabel_ii.portal.client."
             "CanalClient.async_fetch_consumption",
             fetch,
         ),
         patch(
-            "custom_components.canal_de_isabel_ii.storage.CanalHistoryStore.async_load",
+            "custom_components.canal_de_isabel_ii.consumption.storage.CanalHistoryStore.async_load",
             return_value=None,
         ),
         patch(
-            "custom_components.canal_de_isabel_ii.storage.CanalHistoryStore.async_save",
+            "custom_components.canal_de_isabel_ii.consumption.storage.CanalHistoryStore.async_save",
             return_value=None,
         ),
     ):
@@ -475,16 +515,16 @@ async def test_manual_full_resync_reuses_cached_snapshot(
 
     with (
         patch(
-            "custom_components.canal_de_isabel_ii.client."
+            "custom_components.canal_de_isabel_ii.portal.client."
             "CanalClient.async_fetch_consumption",
             fetch,
         ),
         patch(
-            "custom_components.canal_de_isabel_ii.storage.CanalHistoryStore.async_load",
+            "custom_components.canal_de_isabel_ii.consumption.storage.CanalHistoryStore.async_load",
             return_value=snapshot,
         ),
         patch(
-            "custom_components.canal_de_isabel_ii.storage.CanalHistoryStore.async_save",
+            "custom_components.canal_de_isabel_ii.consumption.storage.CanalHistoryStore.async_save",
             return_value=None,
         ),
     ):
@@ -540,12 +580,12 @@ async def test_authentication_failure_starts_reauthentication(
 
     with (
         patch(
-            "custom_components.canal_de_isabel_ii.client."
+            "custom_components.canal_de_isabel_ii.portal.client."
             "CanalClient.async_fetch_consumption",
             side_effect=failure,
         ),
         patch(
-            "custom_components.canal_de_isabel_ii.storage.CanalHistoryStore.async_load",
+            "custom_components.canal_de_isabel_ii.consumption.storage.CanalHistoryStore.async_load",
             return_value=None,
         ),
     ):
@@ -575,12 +615,12 @@ async def test_cached_sensors_remain_available_when_captcha_refresh_fails(
 
     with (
         patch(
-            "custom_components.canal_de_isabel_ii.client."
+            "custom_components.canal_de_isabel_ii.portal.client."
             "CanalClient.async_fetch_consumption",
             side_effect=CanalCaptchaError("solver failed"),
         ),
         patch(
-            "custom_components.canal_de_isabel_ii.storage.CanalHistoryStore.async_load",
+            "custom_components.canal_de_isabel_ii.consumption.storage.CanalHistoryStore.async_load",
             return_value=make_snapshot(),
         ),
         patch(
@@ -618,12 +658,12 @@ async def test_temporary_portal_failure_remains_retryable(hass: HomeAssistant) -
 
     with (
         patch(
-            "custom_components.canal_de_isabel_ii.client."
+            "custom_components.canal_de_isabel_ii.portal.client."
             "CanalClient.async_fetch_consumption",
             side_effect=CanalConnectionError("offline"),
         ),
         patch(
-            "custom_components.canal_de_isabel_ii.storage.CanalHistoryStore.async_load",
+            "custom_components.canal_de_isabel_ii.consumption.storage.CanalHistoryStore.async_load",
             return_value=None,
         ),
     ):
@@ -643,16 +683,16 @@ async def test_entry_updates_use_the_registered_reload_listener(
 
     with (
         patch(
-            "custom_components.canal_de_isabel_ii.client."
+            "custom_components.canal_de_isabel_ii.portal.client."
             "CanalClient.async_fetch_consumption",
             return_value=make_snapshot(),
         ),
         patch(
-            "custom_components.canal_de_isabel_ii.storage.CanalHistoryStore.async_load",
+            "custom_components.canal_de_isabel_ii.consumption.storage.CanalHistoryStore.async_load",
             return_value=None,
         ),
         patch(
-            "custom_components.canal_de_isabel_ii.storage.CanalHistoryStore.async_save",
+            "custom_components.canal_de_isabel_ii.consumption.storage.CanalHistoryStore.async_save",
             return_value=None,
         ),
     ):

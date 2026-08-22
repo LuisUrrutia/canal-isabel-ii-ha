@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo
 
 from aiohttp import ClientSession, CookieJar
 
-from custom_components.canal_de_isabel_ii.client import (
+from custom_components.canal_de_isabel_ii.portal import (
     CanalAuthenticationError,
     CanalCaptchaError,
     CanalClient,
@@ -22,7 +22,7 @@ from custom_components.canal_de_isabel_ii.client import (
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
-    from custom_components.canal_de_isabel_ii.models import (
+    from custom_components.canal_de_isabel_ii.consumption import (
         ConsumptionSnapshot,
         ContractConsumption,
     )
